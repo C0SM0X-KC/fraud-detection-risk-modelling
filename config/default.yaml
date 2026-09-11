@@ -1,0 +1,216 @@
+# Financial Transaction Fraud Detection and Risk Modelling
+# Single source of truth for the Phase-3 implementation.
+# Every number here traces back to a table in the Phase-1/2 report.
+
+project:
+  name: frds
+  seed: 42
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  artifacts: artifacts
+  reports: reports
+
+data:
+  # IEEE-CIS Fraud Detection (primary benchmark, report Table 4.4)
+  dataset: ieee_cis
+  transaction_file: train_transaction.csv
+  identity_file: train_identity.csv
+  id_col: TransactionID
+  time_col: TransactionDT
+  target_col: isFraud
+  amount_col: TransactionAmt
+  # Reference epoch for TransactionDT (seconds offset). Used only to derive
+  # calendar features; the absolute date is not needed for the split.
+  dt_origin_days: 0
+  # Set to a positive integer to work on a chronological head of the data
+  # while developing. null = use every row.
+  sample_rows: null
+
+split:
+  # Report objective 1: strictly chronological, no future leakage.
+  strategy: chronological
+  train_frac: 0.70   # first 70% of the timeline
+  valid_frac: 0.10   # next 10%   -> meta-learner + calibration fitting
+  test_frac: 0.20    # final 20%  -> reported metrics only
+  # Expanding-window folds inside the train span, used to produce the
+  # out-of-fold base-model predictions the stacker consumes.
+  n_oof_folds: 5
+  # After early stopping has chosen an iteration count, refit the final
+  # model on train + validation before scoring test. On a chronological
+  # split the validation span is the data closest in time to the test
+  # period, so withholding it from the final fit wastes the most relevant
+  # rows. The calibrator still uses pre-refit validation scores.
+  # After early stopping fixes the iteration count, refit the final model on
+  # the training span plus the earlier part of validation. On a chronological
+  # split that is the data closest in time to the test period, so withholding
+  # it wastes the most relevant rows. Worth +0.036 AUC-PR under a 30-day label
+  # delay (scripts/experiment_feature_package.py).
+  refit_on_valid: true
+  # Fraction of the validation span held back from the refit. The refitted
+  # model scores this holdout, and those scores are what the calibrator is
+  # fitted on and what the decision layer selects against - so both see the
+  # same model on rows it never trained on. Refitting without a holdout
+  # calibrates one distribution and applies the curve to another, which
+  # measurably degrades the tiers.
+  calibration_holdout_frac: 0.3
+  # If the holdout would contain fewer fraud cases than this, calibration
+  # would be fitting noise; the refit is skipped and the whole validation
+  # span is used for calibration instead.
+  min_calibration_positives: 200
+
+features:
+  # Entity keys used for velocity counters and for the heterogeneous graph.
+  entity_keys:
+    card: [card1, card2, card3, card5]
+    address: [addr1, addr2]
+    email: [P_emaildomain, R_emaildomain]
+    device: [DeviceInfo, DeviceType]
+  # Synthetic account identifier: the IEEE-CIS convention of anchoring a card
+  # to its first-seen day via D1. Gives a far better entity than card1 alone.
+  uid_components: [card1, addr1, P_emaildomain]
+  velocity_windows_hours: [1, 24, 168]     # 1 hour, 1 day, 1 week
+  rolling_amount_windows: [5, 20]          # last-N transactions per entity
+  min_category_frequency: 20               # rarer levels collapse to __rare__
+  max_v_columns: 120                       # V1..V339 reduced by NaN-group + corr
+  # Fraud outcomes are not known the instant the fraud happens - a chargeback
+  # takes weeks. This withholds a label from the target-encoding features until
+  # this many days after its transaction. 0 = the optimistic assumption stated
+  # in report section 4.3; set 30 or 60 to test it.
+  label_delay_days: 0
+  # Drop the per-entity prior-fraud-rate features altogether (ablation).
+  disable_target_encoding: false
+  # Re-express time-growing features so their distribution does not move
+  # simply because time has passed: drop the raw day index, anchor the D
+  # columns to a fixed origin, and turn cumulative counters into rates and
+  # shares. Measured in scripts/experiment_stationarity.py.
+  stationarise: true
+  # Per-entity running means and this row's ratio to them. Behavioural
+  # rather than label-derived, so unlike the prior-fraud-rate features they
+  # should survive a label-confirmation delay.
+  entity_aggregates: true
+  aggregate_entities: [uid, card, device]
+  aggregate_value_columns: [TransactionAmt, D2, D10, D15, C1, C13]
+  drop_null_threshold: 0.90                # drop columns with >90% missing
+
+imbalance:
+  # Report Table 4.1 step A.5: training fold only, never validation or test.
+  method: class_weight                     # class_weight | smote | adasyn | none
+  sampling_strategy: 0.10                  # minority:majority ratio if resampling
+  # Exponentially down-weight older training rows: the number of days over
+  # which a row's influence halves. null disables it. Fraud is
+  # non-stationary, so a day-1 pattern is weaker evidence about the
+  # deployment period than a day-120 one.
+  recency_half_life_days: null
+
+models:
+  # One representative per tier of report Table 4.2. 'tcn' is the alternative
+  # sequential head and 'tabpfn' needs `pip install tabpfn`; add either to this
+  # list to include it in the benchmark.
+  enabled: [logistic_regression, random_forest, xgboost, lightgbm, lstm, hetero_gnn]
+  logistic_regression:
+    C: 0.1
+    max_iter: 2000
+  random_forest:
+    n_estimators: 300
+    max_depth: 18
+    min_samples_leaf: 20
+    n_jobs: -1
+  xgboost:
+    n_estimators: 2000
+    learning_rate: 0.03
+    max_depth: 8
+    subsample: 0.8
+    colsample_bytree: 0.6
+    min_child_weight: 5
+    reg_lambda: 1.0
+    early_stopping_rounds: 100
+    tree_method: hist
+  lightgbm:
+    n_estimators: 3000
+    learning_rate: 0.03
+    num_leaves: 128
+    min_child_samples: 50
+    subsample: 0.8
+    subsample_freq: 1
+    colsample_bytree: 0.6
+    reg_lambda: 1.0
+    early_stopping_rounds: 100
+  # Selected by the grid search in scripts/tune_deep_tiers.py on the
+  # VALIDATION span. See report section 4.8: no configuration in the grid
+  # lifted test AUC-PR above 0.11 for either tier.
+  lstm:
+    entity: uid          # sequences are built per synthetic account
+    window: 24           # transactions of history shown to the model
+    hidden: 128
+    dropout: 0.2
+    epochs: 25
+    batch_size: 1024
+    lr: 0.001
+  tcn:
+    entity: uid
+    window: 12
+    hidden: 64
+    dropout: 0.2
+    epochs: 12
+    batch_size: 1024
+    lr: 0.001
+  hetero_gnn:
+    relations: [card, merchant, device, address, email]
+    hidden: 64
+    dropout: 0.2
+    memory_decay: 0.8    # share of an entity's past state kept per update
+    epochs: 20
+    batch_size: 2048
+    lr: 0.002
+  tabpfn:
+    context_size: 8000           # published operating range, not a tuning knob
+    max_features: 100
+    negatives_per_positive: 8
+    batch_size: 2000
+
+tuning:
+  enabled: false
+  n_trials: 30
+  timeout_seconds: 3600
+
+fusion:
+  meta_learner: logistic_regression        # trained on out-of-fold base scores
+  calibration: isotonic                    # report section 4.6
+  # Carry forward whichever of the stacked score and the individual base
+  # scores wins on the VALIDATION span. Stacking is always fitted and
+  # always reported; this decides only what the decision layer consumes.
+  # Set false to force the stacked score even when it loses.
+  select_on_validation: true
+  # Below this many fraud cases in the calibration set, isotonic regression
+  # fits noise; Platt scaling is used instead.
+  isotonic_min_positives: 500
+  # Below this, no calibration curve can be estimated at all and the score
+  # is left uncalibrated rather than distorted.
+  min_calibration_positives: 50
+
+risk:
+  # Report Table 4.3
+  score_min: 0
+  score_max: 100
+  tiers:
+    low:    {lo: 0,  hi: 29,  action: auto_approve}
+    medium: {lo: 30, hi: 69,  action: step_up_auth}
+    high:   {lo: 70, hi: 100, action: manual_review}
+  # Cost-sensitive threshold search (report section 4.6):
+  # flag when p * C_FN > (1 - p) * C_FP.
+  cost_fn_multiplier: 1.0                  # C_FN = multiplier * transaction amount
+  cost_fp_fixed: 25.0                      # C_FP = review effort + goodwill, currency units
+  daily_review_capacity_pct: 0.005         # analyst budget as fraction of daily volume
+
+evaluation:
+  primary_metric: auc_pr
+  fpr_targets: [0.001, 0.005, 0.01, 0.05]  # recall @ fixed FPR
+  psi_windows: 6                           # temporal windows for drift
+  psi_bins: 10
+  psi_alert_threshold: 0.25
+  latency_sample_size: 5000
+  shap_max_display: 15
+  shap_background_size: 2000
