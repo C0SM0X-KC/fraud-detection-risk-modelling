@@ -697,11 +697,15 @@ const chapter5 = [
     "exceeds the requirement comfortably."),
 
   H2("5.3  Contribution Summary"),
-  P("This project was carried out individually. All components - the data pipeline, the " +
-    "feature layer and its causality guarantees, the five model tiers, the fusion and " +
-    "calibration layer, the risk and cost model, the explanation and drift monitoring, the " +
-    "test suite, the ablation study and this report - were designed and implemented by the " +
-    "author under the guidance of Dr. Usha M."),
+  P("[TO BE COMPLETED BEFORE SUBMISSION - divide the work and list who is responsible " +
+    "for which part. The guidelines award the 100 marks on individual contribution, so " +
+    "this section cannot be left generic.]", { bold: true }),
+  P("The project was carried out by a group of three: Kabir Chhabra (235805300), Mayank " +
+    "(235805360) and Nandurkar Shreyas Vivek (235805446), under the guidance of " +
+    "Dr. Usha M. The components to be attributed are the data pipeline and ingestion " +
+    "layer; the feature layer and its causality guarantees; the five model tiers; the " +
+    "fusion, calibration and risk-tier decision layer; the explanation and drift " +
+    "monitoring; the experiment suite; and this report."),
 
   H2("5.4  Future Scope"),
   P("The first direction is the serving layer. The scoring path exists and its cost has " +
@@ -791,12 +795,12 @@ const backMatter = [
   P("Student Details", { bold: true, after: 120 }),
   T([
     ["Field", "Detail"],
-    ["Student Name", "Nandurkar Shreyas Vivek"],
-    ["Section / Roll No", "CSE Core B"],
-    ["Registration Number", "235805446"],
+    ["Student Name", "Kabir Chhabra"],
+    ["Registration Number", "235805300"],
     ["Semester", "VII"],
-    ["Email Address", "nandurkar.mitblr2023@learner.manipal.edu"],
-    ["Phone No (M)", "+91 9004491325"],
+    ["Group Members", "Mayank (235805360); Nandurkar Shreyas Vivek (235805446)"],
+    ["Email Address", "[to be filled]"],
+    ["Phone No (M)", "[to be filled]"],
   ], [3, 7], { numericFrom: 99 }),
   P("Project Details", { bold: true, after: 120 }),
   T([

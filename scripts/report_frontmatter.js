@@ -240,8 +240,10 @@ const titlePage = [
   P("COMPUTER SCIENCE AND ENGINEERING",
     { align: AlignmentType.CENTER, bold: true, size: 26, after: 400 }),
   P("Submitted by", { align: AlignmentType.CENTER, after: 0 }),
-  P("Nandurkar Shreyas Vivek", { align: AlignmentType.CENTER, bold: true, after: 0 }),
-  P("235805446", { align: AlignmentType.CENTER, after: 300 }),
+  P("Kabir Chhabra  (235805300)", { align: AlignmentType.CENTER, bold: true, after: 0 }),
+  P("Mayank  (235805360)", { align: AlignmentType.CENTER, bold: true, after: 0 }),
+  P("Nandurkar Shreyas Vivek  (235805446)",
+    { align: AlignmentType.CENTER, bold: true, after: 300 }),
   P("Under the guidance of", { align: AlignmentType.CENTER, after: 0 }),
   P("Dr. Usha M", { align: AlignmentType.CENTER, bold: true, after: 0 }),
   P("Associate Professor, Department of Computer Science and Engineering",
@@ -259,8 +261,9 @@ const certificate = [
   P("Bengaluru", { align: AlignmentType.CENTER, after: 400 }),
   H1("CERTIFICATE"),
   P("This is to certify that the minor project titled FINANCIAL TRANSACTION FRAUD " +
-    "DETECTION AND RISK MODELLING is a record of the bonafide work done by NANDURKAR " +
-    "SHREYAS VIVEK (Reg. No. 235805446), submitted in partial fulfilment of the " +
+    "DETECTION AND RISK MODELLING is a record of the bonafide work done by KABIR CHHABRA " +
+    "(Reg. No. 235805300), MAYANK (Reg. No. 235805360) and NANDURKAR SHREYAS VIVEK " +
+    "(Reg. No. 235805446), submitted in partial fulfilment of the " +
     "requirements for the award of the Degree of Bachelor of Technology (B.Tech.) in " +
     "COMPUTER SCIENCE AND ENGINEERING of Manipal Institute of Technology Bengaluru, " +
     "Karnataka (A Constituent Institute of Manipal Academy of Higher Education), " +
@@ -276,19 +279,20 @@ const certificate = [
 
 const acknowledgement = [
   H1("ACKNOWLEDGEMENT"),
-  P("I express my sincere gratitude to my project guide, Dr. Usha M, Department of " +
+  P("We express our sincere gratitude to our project guide, Dr. Usha M, Department of " +
     "Computer Science and Engineering, Manipal Institute of Technology Bengaluru, for her " +
     "guidance through every stage of this work. Her observations at the earlier reviews - " +
     "on the need for an explicit end-to-end workflow, on updating the modelling approach " +
     "to reflect current literature, and on presenting the survey findings in tabular form " +
     "- shaped the specification that this phase implements."),
-  P("I thank the Head of the Department of Computer Science and Engineering and the " +
+  P("We thank the Head of the Department of Computer Science and Engineering and the " +
     "Director, Manipal Institute of Technology Bengaluru, for the academic environment and " +
-    "the computational facilities that made this work possible. I also acknowledge the " +
+    "the computational facilities that made this work possible. We also acknowledge the " +
     "faculty members and laboratory staff of the department whose assistance was sought " +
     "during the course of the project."),
-  P("Nandurkar Shreyas Vivek", { bold: true, after: 0 }),
-  P("235805446", { after: 0 }),
+  P("Kabir Chhabra (235805300)", { bold: true, after: 0 }),
+  P("Mayank (235805360)", { bold: true, after: 0 }),
+  P("Nandurkar Shreyas Vivek (235805446)", { bold: true, after: 0 }),
   Break(),
 ];
 

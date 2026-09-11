@@ -4,8 +4,8 @@ Implementation of the pipeline specified in the Phase-1/Phase-2 report: a
 five-stage fraud detection and risk-scoring system evaluated under a strictly
 chronological protocol on the IEEE-CIS Fraud Detection benchmark.
 
-Nandurkar Shreyas Vivek · 235805446 · CSE, MIT Bengaluru
-Guide: Dr. Usha M
+Kabir Chhabra (235805300) · Mayank (235805360) · Nandurkar Shreyas Vivek (235805446)
+CSE, MIT Bengaluru · Guide: Dr. Usha M
 
 ---
 
@@ -123,23 +123,32 @@ not happened yet. Here each entity node carries a memory that is read before
 the transaction is scored and written after, so a transaction never informs its
 own score and no future transaction reaches it (`models/graph.py`).
 
-**The stacker is fitted on out-of-fold scores.** Base models are fitted five
-times over expanding time windows to produce the meta-learner's training
-matrix, then once more on the whole train span to score validation and test.
-Fitting the meta-learner on in-sample train scores would teach it that whichever
-base model memorised the training set best is always right.
+**The stacker is fitted on out-of-fold scores, and is not adopted blindly.**
+Base models are fitted over expanding time windows to build the meta-learner's
+training matrix. But the meta-learner is trained on scores from *fold* models
+and applied to scores from the *final* models, and that gap can leave the stack
+below its own strongest member. So the decision layer scores every candidate -
+the stack and each base model - on held-out data and carries the winner
+forward. On IEEE-CIS the stack loses, and the code says so rather than
+presenting an ensemble that did not earn its place.
 
-**Calibration is fitted on validation, not train.** Isotonic regression on the
-validation span, which the base models never saw. Thresholds set on
-uncalibrated scores do not correspond to any real cost.
+**Refitting is paired with a calibration holdout.** On a chronological split
+the validation span is the data closest in time to the test period, so
+withholding all of it from the final model wastes the most relevant rows.
+Refitting on it naively, however, leaves the calibrator fitted on the pre-refit
+model and applied to the refitted one - measured, that degraded expected
+calibration error sixfold. Instead the validation span is cut: the earlier part
+joins the refit, the later part is held back and scored by the refitted model,
+and that holdout is what the calibrator is fitted on and what the selector uses.
+Both then see the same model on rows it never trained on.
 
 **Two tier policies are reported, not one.** The report's fixed bands
-(Low 0-29, Medium 30-69, High 70-100) are computed as specified. But at 3.5%
-prevalence a properly calibrated probability rarely exceeds 0.7, so the literal
-70-100 band holds very few transactions. A second policy derives the boundaries
-from the cost model (`p* = C_FP / (C_FP + C_FN)`) clipped by the analyst review
-budget. Both go into `reports/tables/`, so the gap between the specification and
-what an operation would actually run is visible rather than papered over.
+(Low 0-29, Medium 30-69, High 70-100) are computed as specified, and on this
+data they work well - the high band holds about 2.5% of volume and around 70% of
+all fraud at over 90% precision. A second policy derives the boundaries from the
+cost model (`p* = C_FP / (C_FP + C_FN)`) clipped by the analyst review budget.
+Both go into `reports/tables/`, so the specified policy and the one an operation
+would actually run can be compared rather than assumed equivalent.
 
 **Latency is measured on the whole serving path.** All enabled tiers are
 reloaded from disk and reconnected to the feature frame, the graph tier's
@@ -207,6 +216,27 @@ tests/                    unit tests and the end-to-end smoke test
 reports/                  generated figures, tables and metrics
 ```
 
+## The demonstration
+
+```bash
+streamlit run serving/dashboard.py          # analyst console
+uvicorn serving.api:app --port 8000         # scoring endpoint
+```
+
+The console replays the held-out test span in chronological order and shows the
+system deciding as traffic arrives: the alert queue an analyst would work, the
+SHAP reason codes behind any alert they select, the tier breakdown, and the
+serving cost per batch. Replaying a historical span in order is the proxy for a
+live stream that the report's assumptions describe, and it is the configuration
+in which the latency requirement is actually met - single-transaction scoring
+costs around 126 ms against 0.24 ms amortised in batches.
+
+Both surfaces are driven by the same `FraudScorer`, so they cannot disagree
+about what the system does. It loads only what the fusion stage selected: when
+that stage prefers a single model to the stack, one model is served rather than
+six, because serving the five tiers the evaluation rejected would misrepresent
+the system.
+
 ## Status and what is not here yet
 
 Implemented and verified end to end: all five workflow stages, all five model
@@ -215,9 +245,9 @@ codes, PSI drift and latency measurement.
 
 Not yet built, and deliberately out of scope for this increment:
 
-- **Serving.** The FastAPI endpoint, the Kafka replay harness and the Streamlit
-  analyst dashboard named in report Table 4.6. The scoring path exists and is
-  timed; only the transport around it is missing.
+- **Kafka transport.** The replay harness stands in for it. A broker would add
+  setup fragility to a demonstration without changing what is demonstrated.
+
 - **Optuna tuning.** The `tuning` block in the config is read but no search is
   wired up; hyper-parameters are currently the hand-set values in the config.
 - **Adversarial robustness.** Report Table 4.2 lists a PGD-style evaluation
