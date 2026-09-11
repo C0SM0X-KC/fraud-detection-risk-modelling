@@ -27,3 +27,6 @@ mlruns/
 
 # setuptools build metadata
 *.egg-info/
+
+# editor/tooling config
+.claude/
