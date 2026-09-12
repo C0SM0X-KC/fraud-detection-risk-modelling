@@ -1,0 +1,17 @@
+# The accent has one job: it marks risk. Streamlit paints progress bars,
+# sliders and selections in primaryColor, so setting it here keeps the risk
+# bars in the queue the same brass as everything else that means "the model
+# judged this", rather than fighting the framework default in CSS.
+[theme]
+base = "dark"
+primaryColor = "#C9922E"
+backgroundColor = "#12151C"
+secondaryBackgroundColor = "#171B24"
+textColor = "#C6CAD2"
+font = "monospace"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
