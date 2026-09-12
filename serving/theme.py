@@ -46,7 +46,28 @@ CSS = """
   --sans:'Archivo',system-ui,sans-serif;
 }
 
-#MainMenu, footer, header[data-testid="stHeader"] { display:none !important; }
+/* Hide the framework furniture, but NOT the toolbar itself: the control that
+   reopens a collapsed sidebar lives inside it, and hiding the whole bar strands
+   anyone who collapses one. Only the deploy and menu actions go. */
+#MainMenu, footer,
+[data-testid="stToolbarActions"],
+[data-testid="stHeaderActionElements"],
+[data-testid="stMainMenuButton"] { display:none !important; }
+header[data-testid="stHeader"] { background:transparent !important; }
+
+/* The sidebar controls are real controls, so they get the accent and a focus
+   ring rather than being left in the framework's default grey. */
+button[data-testid="stExpandSidebarButton"],
+[data-testid="stSidebarCollapseButton"] button {
+  color:var(--pen) !important; background:var(--panel) !important;
+  border:1px solid var(--rule) !important; border-radius:0 !important;
+}
+button[data-testid="stExpandSidebarButton"]:hover,
+[data-testid="stSidebarCollapseButton"] button:hover { border-color:var(--pen) !important; }
+button[data-testid="stExpandSidebarButton"]:focus-visible,
+[data-testid="stSidebarCollapseButton"] button:focus-visible {
+  outline:2px solid var(--pen) !important; outline-offset:2px;
+}
 [data-testid="stAppViewContainer"] { background:var(--stock); }
 [data-testid="stSidebar"] { background:var(--panel); border-right:1px solid var(--rule); }
 [data-testid="stAppViewBlockContainer"] { padding:2rem 2.6rem 4rem; max-width:1500px; }
