@@ -1,12 +1,11 @@
-# The accent has one job: it marks what the model flagged, the way a reviewer
-# marks a ledger. Streamlit paints selections and controls in primaryColor, so
-# setting it here keeps those in the same pen red as the margin strokes.
+# The accent marks what the model judged; streamlit paints selections and
+# controls in primaryColor, so it stays the same blue as the margin marks.
 [theme]
-base = "light"
-primaryColor = "#B3261E"
-backgroundColor = "#F3F5F0"
-secondaryBackgroundColor = "#E2EADC"
-textColor = "#1B1F1B"
+base = "dark"
+primaryColor = "#4F9CF9"
+backgroundColor = "#0F141C"
+secondaryBackgroundColor = "#131A24"
+textColor = "#A8B2C1"
 
 [server]
 headless = true

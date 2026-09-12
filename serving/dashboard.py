@@ -167,7 +167,7 @@ if queue.decisions.empty:
     st.stop()
 
 # ------------------------------------------------------------------ queue --
-left, right = st.columns([3, 2], gap="large")
+left, right = st.columns([7, 4], gap="large")
 
 with left:
     st.markdown('<div class="section">Ledger &middot; held and challenged entries</div>', unsafe_allow_html=True)
@@ -184,8 +184,9 @@ with left:
             "Ruling": view["tier"].map(TIER_VERB),
             "Amount": view["amount"].astype(float).map("{:,.2f}".format),
             "Day": view["day"].astype(float).map("{:.2f}".format),
-            "Outcome": np.where(view["is_fraud"] == 1, "\u25a0 fraud", "\u2014"),
-            "Entry": view["position"].astype(int),
+            # The entry number is deliberately absent: the margin note already
+            # names it, and a seventh column is what forced the table to scroll.
+            "Outcome": np.where(view["is_fraud"] == 1, "\u25a0", "\u00b7"),
         })
         event = st.dataframe(
             ledger_style(table, view["tier"], view["is_fraud"] == 1),
@@ -194,9 +195,13 @@ with left:
             column_config={
                 "": st.column_config.TextColumn(
                     "", width="small",
-                    help="A pen stroke in the margin marks an entry held for review."),
+                    help="A mark in the margin means the entry was held for review."),
+                "Risk": st.column_config.NumberColumn("Risk", width="small"),
+                "Ruling": st.column_config.TextColumn("Ruling", width="small"),
+                "Amount": st.column_config.TextColumn("Amount", width="small"),
+                "Day": st.column_config.TextColumn("Day", width="small"),
                 "Outcome": st.column_config.TextColumn(
-                    "Outcome",
+                    "Was fraud", width="small",
                     help="Ground truth, stamped after the fact. Shown only because "
                          "this is an evaluation harness; a live ledger would not have it."),
             },
@@ -250,8 +255,9 @@ with right:
             )
 
 # ------------------------------------------------------------- governance --
-st.markdown('<div class="section">Tally &middot; where the fraud sits</div>', unsafe_allow_html=True)
-g1, g2, g3 = st.columns([2, 1, 1], gap="large")
+st.markdown('<div class="section">Tally &middot; where the fraud sits</div>',
+            unsafe_allow_html=True)
+g1, g2 = st.columns([3, 4], gap="large")
 
 with g1:
     decisions = queue.decisions
@@ -274,22 +280,16 @@ with g2:
     tiers = queue.tier_counts()
     tiers["tier"] = tiers["tier"].map(TIER_VERB)
     st.dataframe(
-        tiers.rename(columns={"tier": "Action", "transactions": "Count",
-                              "fraud": "Fraud", "precision": "Precision"})
+        tiers.rename(columns={"tier": "Ruling", "transactions": "Entries",
+                              "fraud": "Were fraud", "precision": "Precision"})
              .style.format({"Precision": "{:.1%}"}),
         hide_index=True, use_container_width=True,
     )
-
-with g3:
     if queue.batch_latency_ms:
-        st.line_chart(
-            pd.DataFrame({"ms per transaction": queue.batch_latency_ms}),
-            height=150, color="#B3261E",
-        )
         st.markdown(
-            f'<p class="note">Median <b>{np.median(queue.batch_latency_ms):.3f} ms</b> '
-            f"per entry, amortised over batches of {batch_size}. "
-            f"Posting one at a time costs ~126 ms.</p>",
+            f'<p class="note" style="margin-top:.7rem">Median '
+            f"<b>{np.median(queue.batch_latency_ms):.3f} ms</b> per entry, amortised "
+            f"over batches of {batch_size}. Posting one at a time costs ~126 ms.</p>",
             unsafe_allow_html=True,
         )
 

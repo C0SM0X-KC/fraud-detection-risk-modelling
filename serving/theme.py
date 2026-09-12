@@ -3,17 +3,19 @@
 The screen's ancestor is a printed ledger, so the design is built from one:
 green-bar accounting paper, marked up by a reviewer.
 
-The alternating pale-green bands are not decoration. They existed on columnar
-paper because the eye loses its place tracking across a wide row of figures, and
-a transaction queue has exactly that problem, so the banding is doing the job it
-was invented for.
+The alternating bands are not decoration. Columnar paper was printed that way
+because the eye loses its place tracking across a wide row of figures, and a
+transaction queue has exactly that problem, so the banding is doing the job it
+was invented for. Held dark, the bands are a two-step shift rather than a
+stripe: enough to guide the eye, not enough to read as a pattern.
 
-Colour is spent only where it carries meaning, and the two accents are borrowed
-from how ledgers were actually annotated. A red pen stroke in the margin is the
-reviewer flagging an entry - here, what the model judged. A violet stamp is the
-entry confirmed - here, what turned out to be fraud. Scanning the gutter, a
-stroke without a stamp is a false alarm and a stamp without a stroke is a miss,
-so precision and recall are legible in the margin before any figure is read.
+Colour is spent only where it carries meaning, and the two accents keep separate
+jobs. Blue is the reviewer's mark in the margin - what the model judged. The
+stamp is near-white, and it is deliberately the brightest thing on the screen,
+because confirmed fraud is the one fact here that is not a prediction. Scanning
+the gutter, a mark without a stamp is a false alarm and a stamp without a mark is
+a miss, so precision and recall are legible in the margin before any figure is
+read.
 
 Figures are set in a monospaced face with tabular lining numerals, because a
 column of amounts has to align on the decimal to be scannable. They are set as
@@ -23,13 +25,14 @@ figures, not as bars: a ledger states a number and marks the margin.
 from __future__ import annotations
 
 TOKENS = {
-    "stock": "#F3F5F0",   # page - cool ledger paper
-    "band": "#E2EADC",    # the green bar
-    "rule": "#BFC9B8",    # printed rules
-    "ink": "#1B1F1B",     # text
-    "faint": "#6C7369",   # secondary
-    "pen": "#B3261E",     # the model flagged it
-    "stamp": "#5E3B92",   # confirmed fraud
+    "stock": "#0F141C",   # page - deep slate, not black
+    "band": "#151C27",    # the alternating band
+    "panel": "#131A24",   # slips and panels
+    "rule": "#253040",    # ruled lines
+    "ink": "#A8B2C1",     # body text
+    "faint": "#5F6B7C",   # secondary
+    "pen": "#4F9CF9",     # the model marked it
+    "stamp": "#EDF3FA",   # confirmed fraud - the brightest thing on screen
 }
 
 CSS = """
@@ -37,15 +40,15 @@ CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Azeret+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --stock:#F3F5F0; --band:#E2EADC; --rule:#BFC9B8;
-  --ink:#1B1F1B; --faint:#6C7369; --pen:#B3261E; --stamp:#5E3B92;
+  --stock:#0F141C; --band:#151C27; --panel:#131A24; --rule:#253040;
+  --ink:#A8B2C1; --faint:#5F6B7C; --pen:#4F9CF9; --stamp:#EDF3FA;
   --mono:'Azeret Mono',ui-monospace,monospace;
   --sans:'Archivo',system-ui,sans-serif;
 }
 
 #MainMenu, footer, header[data-testid="stHeader"] { display:none !important; }
 [data-testid="stAppViewContainer"] { background:var(--stock); }
-[data-testid="stSidebar"] { background:var(--band); border-right:1px solid var(--rule); }
+[data-testid="stSidebar"] { background:var(--panel); border-right:1px solid var(--rule); }
 [data-testid="stAppViewBlockContainer"] { padding:2rem 2.6rem 4rem; max-width:1500px; }
 [data-testid="stVerticalBlock"] { gap:0.85rem; }
 html, body, [class*="css"] { font-family:var(--sans); color:var(--ink); }
@@ -57,7 +60,7 @@ html, body, [class*="css"] { font-family:var(--sans); color:var(--ink); }
 }
 .masthead {
   font-family:var(--sans); font-size:27px; font-weight:700; letter-spacing:-.022em;
-  color:var(--ink); margin:0 0 .15rem; line-height:1.05;
+  color:#E6ECF4; margin:0 0 .15rem; line-height:1.05;
 }
 .masthead-sub { font-family:var(--mono); font-size:11px; color:var(--faint); margin:0 0 .9rem; }
 
@@ -76,22 +79,22 @@ html, body, [class*="css"] { font-family:var(--sans); color:var(--ink); }
                border-right:2px solid var(--pen); }
 
 /* -- the totals line, as a statement rules it -------------------------- */
-.figures { display:flex; border-top:1.5px solid var(--ink); border-bottom:1px solid var(--rule); }
+.figures { display:flex; border-top:1.5px solid var(--rule); border-bottom:1px solid var(--rule); }
 .fig { flex:1; padding:.8rem 1rem; border-right:1px solid var(--rule); }
 .fig:last-child { border-right:none; }
 .fig-k { font-family:var(--mono); font-size:9.5px; letter-spacing:.14em;
          text-transform:uppercase; color:var(--faint); margin-bottom:.3rem; }
 .fig-v { font-family:var(--mono); font-size:25px; font-weight:500;
-         font-variant-numeric:tabular-nums lining-nums; color:var(--ink); line-height:1; }
+         font-variant-numeric:tabular-nums lining-nums; color:#E6ECF4; line-height:1; }
 .fig-v.pen { color:var(--pen); }
 .fig-v.stamp { color:var(--stamp); }
 .fig-n { font-family:var(--mono); font-size:10px; color:var(--faint); margin-top:.28rem; }
 
 /* -- the marginal note ------------------------------------------------- */
 .slip { border:1px solid var(--rule); border-left:3px solid var(--pen);
-        background:#fff; padding:.7rem .9rem; margin-bottom:.9rem;
+        background:var(--panel); padding:.7rem .9rem; margin-bottom:.9rem;
         font-family:var(--mono); font-size:11px; color:var(--faint); line-height:1.7; }
-.slip b { color:var(--ink); font-weight:600; }
+.slip b { color:#E6ECF4; font-weight:600; }
 .slip .pen { color:var(--pen); font-weight:600; }
 .slip .stamp { color:var(--stamp); font-weight:600; }
 
@@ -111,20 +114,23 @@ html, body, [class*="css"] { font-family:var(--sans); color:var(--ink); }
           font-variant-numeric:tabular-nums; }
 .band-track { flex:1; height:10px; border-bottom:1px solid var(--rule); position:relative; }
 .band-track > i { position:absolute; left:0; top:1px; height:3px; background:var(--rule); }
-.band-track > b { position:absolute; left:0; bottom:1px; height:3px; background:var(--stamp); }
+.band-track > b { position:absolute; left:0; bottom:1px; height:3px; background:var(--pen); }
 .legend { font-family:var(--mono); font-size:9.5px; color:var(--faint);
           letter-spacing:.1em; margin-top:.45rem; }
-.legend em { font-style:normal; color:var(--stamp); }
+.legend em { font-style:normal; color:var(--pen); }
 
 /* -- tables ------------------------------------------------------------ */
-[data-testid="stDataFrame"] { border:1px solid var(--rule); }
-[data-testid="stDataFrame"] * { font-family:var(--mono) !important; font-size:12px !important;
+[data-testid="stDataFrame"] { border:1px solid var(--rule); width:100% !important; }
+[data-testid="stDataFrame"] * { font-family:var(--mono) !important; font-size:11.5px !important;
                                 font-variant-numeric:tabular-nums lining-nums; }
+/* Column headings sit in the rule colour so the grid reads as printed. */
+[data-testid="stDataFrame"] [role="columnheader"] { color:var(--faint) !important;
+  text-transform:uppercase; letter-spacing:.08em; font-size:10px !important; }
 
 /* -- controls ---------------------------------------------------------- */
 [data-testid="stSidebar"] .stButton button {
   font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
-  border:1px solid var(--rule); background:var(--stock); color:var(--ink);
+  border:1px solid var(--rule); background:transparent; color:var(--ink);
   border-radius:0; transition:border-color .12s ease, color .12s ease;
 }
 [data-testid="stSidebar"] .stButton button:hover { border-color:var(--pen); color:var(--pen); }
@@ -135,11 +141,11 @@ label, [data-testid="stWidgetLabel"] p {
   color:var(--faint) !important;
 }
 .note { font-family:var(--mono); font-size:10px; color:var(--faint); line-height:1.7; }
-.note b { color:var(--ink); font-weight:600; }
+.note b { color:#E6ECF4; font-weight:600; }
 
 .empty { border:1px solid var(--rule); border-left:3px solid var(--rule);
-         background:#fff; padding:2.2rem; }
-.empty p { font-family:var(--mono); font-size:12px; color:var(--ink); margin:0; }
+         background:var(--panel); padding:2.2rem; }
+.empty p { font-family:var(--mono); font-size:12px; color:#E6ECF4; margin:0; }
 .empty p + p { margin-top:.35rem; color:var(--faint); font-size:10.5px; }
 
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; } }
