@@ -30,7 +30,9 @@ sys.path.insert(0, str(REPO_ROOT / "serving"))
 
 from replay import QueueState, ReplayStream      # noqa: E402
 from scorer import FraudScorer                    # noqa: E402
-from theme import CSS, band_rows, figure_line, reason_rows  # noqa: E402
+from theme import (  # noqa: E402
+    CSS, band_rows, figure_line, ledger_style, reason_rows,
+)
 
 st.set_page_config(page_title="Fraud Risk Console", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
@@ -86,7 +88,7 @@ scorer = get_scorer()
 info = scorer.describe()
 
 with st.sidebar:
-    st.markdown('<div class="eyebrow">Replay</div>', unsafe_allow_html=True)
+    st.markdown('<div class="runline">Replay</div>', unsafe_allow_html=True)
     batch_size = st.select_slider("Batch size", options=[64, 128, 256, 512, 1024], value=256)
     init_state(scorer, batch_size)
 
@@ -103,7 +105,7 @@ with st.sidebar:
         st.session_state.playing = False
         st.session_state.selected = None
 
-    st.markdown('<div class="eyebrow" style="margin-top:1.6rem">Decision layer</div>',
+    st.markdown('<div class="runline" style="margin-top:1.6rem">Decision layer</div>',
                 unsafe_allow_html=True)
     st.markdown(
         f'<p class="note">Score &nbsp; <b style="color:#C6CAD2">{info["selected_score"]}</b><br>'
@@ -124,12 +126,14 @@ stream: ReplayStream = st.session_state.stream
 queue: QueueState = st.session_state.queue
 summary = queue.summary()
 
-st.markdown('<div class="eyebrow">IEEE-CIS · held-out span · days 141-183</div>',
-            unsafe_allow_html=True)
-st.markdown('<h1 class="masthead">Fraud risk console</h1>', unsafe_allow_html=True)
 st.markdown(
-    f'<p class="masthead-sub">{summary["processed"]:,} of {len(stream.positions):,} '
-    f"transactions replayed in arrival order</p>",
+    '<div class="runline">IEEE-CIS &nbsp;&middot;&nbsp; held-out span &nbsp;&middot;&nbsp; '
+    'days 141&ndash;183 &nbsp;&middot;&nbsp; replayed in arrival order</div>',
+    unsafe_allow_html=True)
+st.markdown('<h1 class="masthead">Transaction risk ledger</h1>', unsafe_allow_html=True)
+st.markdown(
+    f'<p class="masthead-sub">{summary["processed"]:,} of '
+    f'{len(stream.positions):,} entries posted</p>',
     unsafe_allow_html=True,
 )
 st.markdown(
@@ -143,21 +147,21 @@ fmt = lambda v, spec: "—" if not np.isfinite(v) else format(v, spec)  # noqa: 
 
 st.markdown(
     figure_line([
-        ("Scanned", f"{summary['processed']:,}", None, False),
-        ("Held", f"{held:,}", "manual review", True),
-        ("Challenged", f"{challenged:,}", "step-up auth", False),
-        ("Caught", f"{summary['fraud_caught']:,}",
-         f"of {summary['fraud_seen']:,} fraud seen", True),
-        ("Queue precision", fmt(summary["precision"], ".1%"), None, False),
-        ("Throughput", fmt(summary["throughput_tps"], ",.0f"), "per second", False),
+        ("Entries", f"{summary['processed']:,}", "posted", ""),
+        ("Marked", f"{held:,}", "held for review", "pen"),
+        ("Challenged", f"{challenged:,}", "step-up auth", ""),
+        ("Confirmed", f"{summary['fraud_caught']:,}",
+         f"of {summary['fraud_seen']:,} fraud present", "stamp"),
+        ("Mark precision", fmt(summary["precision"], ".1%"), "marks that were fraud", ""),
+        ("Throughput", fmt(summary["throughput_tps"], ",.0f"), "entries per second", ""),
     ]),
     unsafe_allow_html=True,
 )
 
 if queue.decisions.empty:
     st.markdown(
-        '<div class="empty" style="margin-top:2rem"><p>The queue is empty.</p>'
-        "<p>Press Play to start the replay, or Step to advance one batch.</p></div>",
+        '<div class="empty" style="margin-top:2rem"><p>The ledger is blank.</p>'
+        "<p>Press Play to begin posting entries, or Step to post one batch.</p></div>",
         unsafe_allow_html=True,
     )
     st.stop()
@@ -166,32 +170,35 @@ if queue.decisions.empty:
 left, right = st.columns([3, 2], gap="large")
 
 with left:
-    st.markdown('<div class="section">Queue · riskiest first</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section">Ledger &middot; held and challenged entries</div>', unsafe_allow_html=True)
     alerts = queue.alerts()
     if alerts.empty:
-        st.markdown('<p class="note">Nothing flagged yet. Every transaction so far '
-                    "cleared without friction.</p>", unsafe_allow_html=True)
+        st.markdown('<p class="note">No marks yet. Every entry so far cleared '
+                    "without friction.</p>", unsafe_allow_html=True)
     else:
-        view = alerts.head(60).copy()
+        view = alerts.head(60).reset_index(drop=True)
+        # The first column is the margin: a pen stroke beside what was held.
         table = pd.DataFrame({
+            "": np.where(view["tier"] == "high", "\u258c", "\u00b7"),
             "Risk": view["risk_score"].astype(int),
-            "Action": view["tier"].map(TIER_VERB),
-            "Amount": view["amount"].astype(float),
-            "Day": view["day"].astype(float),
-            "Confirmed": np.where(view["is_fraud"] == 1, "fraud", ""),
-            "Row": view["position"].astype(int),
+            "Ruling": view["tier"].map(TIER_VERB),
+            "Amount": view["amount"].astype(float).map("{:,.2f}".format),
+            "Day": view["day"].astype(float).map("{:.2f}".format),
+            "Outcome": np.where(view["is_fraud"] == 1, "\u25a0 fraud", "\u2014"),
+            "Entry": view["position"].astype(int),
         })
         event = st.dataframe(
-            table, hide_index=True, use_container_width=True, height=430,
+            ledger_style(table, view["tier"], view["is_fraud"] == 1),
+            hide_index=True, use_container_width=True, height=430,
             on_select="rerun", selection_mode="single-row",
             column_config={
-                "Risk": st.column_config.ProgressColumn(
-                    "Risk", min_value=0, max_value=100, format="%d", width="medium"),
-                "Amount": st.column_config.NumberColumn("Amount", format="%.2f"),
-                "Day": st.column_config.NumberColumn("Day", format="%.2f"),
-                "Confirmed": st.column_config.TextColumn(
-                    "Outcome", help="Ground truth, shown only because this is an "
-                                    "evaluation harness. A live console would not have it."),
+                "": st.column_config.TextColumn(
+                    "", width="small",
+                    help="A pen stroke in the margin marks an entry held for review."),
+                "Outcome": st.column_config.TextColumn(
+                    "Outcome",
+                    help="Ground truth, stamped after the fact. Shown only because "
+                         "this is an evaluation harness; a live ledger would not have it."),
             },
         )
         rows = event.selection.rows if event and event.selection else []
@@ -199,25 +206,31 @@ with left:
             int(view.iloc[rows[0]]["position"]) if rows
             else int(view.iloc[0]["position"])
         )
-        st.markdown('<p class="note">Select a row to see what drove its score.</p>',
-                    unsafe_allow_html=True)
+        st.markdown(
+            '<p class="note">A <b>&#9612;</b> in the margin was held; a '
+            "<b>&#9632;</b> turned out to be fraud. Strokes without stamps are "
+            "false alarms. Select an entry to see what drove it.</p>",
+            unsafe_allow_html=True)
 
 with right:
-    st.markdown('<div class="section">Why it was flagged</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section">Margin note</div>', unsafe_allow_html=True)
     position = st.session_state.selected
     if position is None:
-        st.markdown('<p class="note">Select an alert.</p>', unsafe_allow_html=True)
+        st.markdown('<p class="note">Select an entry from the ledger.</p>',
+                    unsafe_allow_html=True)
     else:
         row = queue.decisions[queue.decisions["position"] == position].iloc[0]
-        outcome = ('<span class="true">confirmed fraud</span>' if row.is_fraud == 1
-                   else '<span style="color:#4A525F">not fraud</span>')
+        outcome = (
+            '<span class="stamp">&#9632; confirmed fraud</span>' if row.is_fraud == 1
+            else '<span style="color:#BFC9B8">&mdash; not fraud</span>'
+        )
         st.markdown(
-            f'<div class="verdict">Row {int(row.position)} &nbsp;·&nbsp; '
-            f'<b>risk {int(row.risk_score)}</b> &nbsp;·&nbsp; '
-            f'<span class="held">{TIER_VERB[row.tier]}</span><br>'
-            f"amount {row.amount:,.2f} &nbsp;·&nbsp; day {row.day:.2f} "
-            f"&nbsp;·&nbsp; p {row.p_calibrated:.4f}<br>"
-            f"outcome {outcome}</div>",
+            f'<div class="slip">Entry {int(row.position)} &nbsp;&middot;&nbsp; '
+            f'<b>risk {int(row.risk_score)}</b> &nbsp;&middot;&nbsp; '
+            f'<span class="pen">{TIER_VERB[row.tier]}</span><br>'
+            f"amount {row.amount:,.2f} &nbsp;&middot;&nbsp; day {row.day:.2f} "
+            f"&nbsp;&middot;&nbsp; p {row.p_calibrated:.4f}<br>"
+            f"{outcome}</div>",
             unsafe_allow_html=True,
         )
         with st.spinner("Attributing..."):
@@ -237,7 +250,7 @@ with right:
             )
 
 # ------------------------------------------------------------- governance --
-st.markdown('<div class="section">Where the fraud sits</div>', unsafe_allow_html=True)
+st.markdown('<div class="section">Tally &middot; where the fraud sits</div>', unsafe_allow_html=True)
 g1, g2, g3 = st.columns([2, 1, 1], gap="large")
 
 with g1:
@@ -271,12 +284,12 @@ with g3:
     if queue.batch_latency_ms:
         st.line_chart(
             pd.DataFrame({"ms per transaction": queue.batch_latency_ms}),
-            height=150, color="#C9922E",
+            height=150, color="#B3261E",
         )
         st.markdown(
-            f'<p class="note">Median {np.median(queue.batch_latency_ms):.3f} ms '
-            f"per transaction, amortised over batches of {batch_size}. "
-            f"Scoring one at a time costs ~126 ms.</p>",
+            f'<p class="note">Median <b>{np.median(queue.batch_latency_ms):.3f} ms</b> '
+            f"per entry, amortised over batches of {batch_size}. "
+            f"Posting one at a time costs ~126 ms.</p>",
             unsafe_allow_html=True,
         )
 
