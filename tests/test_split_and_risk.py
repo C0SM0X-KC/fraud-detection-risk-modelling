@@ -229,3 +229,60 @@ def test_sequence_cache_reuses_identical_inputs_only():
     assert key_a != key_b                # different values miss
     assert key_a != key_window           # different window misses
     assert key_a != key_codes            # different entity grouping misses
+
+
+# ------------------------------------------------------- explanation ----------
+def test_shap_reason_codes_are_additive_and_ranked():
+    """A reason code is only trustworthy if the contributions add up.
+
+    Local accuracy: the explainer's base value plus every feature contribution
+    must reconstruct the model's own log-odds output. And the feature reported
+    first must genuinely be the largest positive contribution.
+    """
+    import xgboost as xgb
+    from frds.evaluation.explain import reason_codes, tree_shap_values
+
+    rng = np.random.default_rng(11)
+    n = 1_500
+    X = pd.DataFrame({
+        "velocity": rng.poisson(2, n).astype(float),
+        "amount_ratio": rng.lognormal(0, 1, n),
+        "noise": rng.normal(size=n),
+    })
+    logit = 1.4 * X["velocity"] + 0.9 * np.log(X["amount_ratio"]) - 3.0
+    y = (rng.random(n) < 1 / (1 + np.exp(-logit))).astype(int)
+
+    model = xgb.XGBClassifier(n_estimators=60, max_depth=3, learning_rate=0.2,
+                              random_state=0).fit(X, y)
+
+    values = tree_shap_values(model, X)
+    margin = model.get_booster().predict(xgb.DMatrix(X), output_margin=True)
+
+    # Additivity means one base value reconstructs every row: margin minus the
+    # summed contributions must be the same constant throughout. Testing it this
+    # way does not depend on which explainer instance reports expected_value -
+    # comparing against a second instance's base is what made this fail once,
+    # with a constant 0.009 offset, while additivity itself held exactly.
+    implied_base = margin - values.sum(axis=1)
+    assert np.ptp(implied_base) < 1e-4, "contributions do not add up to the model output"
+
+    rows = np.arange(len(X))
+    codes = reason_codes(values, X, rows, top_k=3)
+    has_evidence = values.max(axis=1) > 0
+
+    # Where a row has evidence for fraud, the top reason is the largest positive
+    # contribution.
+    for i in rows[has_evidence][:40]:
+        assert codes.iloc[i]["top_feature"] == X.columns[int(np.argmax(values[i]))]
+
+    # Where it has none, no feature is named - naming the contribution nearest
+    # zero would contradict the "no positive contribution" string.
+    assert (codes.loc[~has_evidence, "top_feature"] == "").all()
+
+    # SHAP explains the model faithfully, including what the model overfits to:
+    # this small forest does learn the noise column, so noise legitimately leads
+    # on some rows and asserting otherwise would be testing the model, not the
+    # explainer. What attribution must get right is the ordering of real signal,
+    # which is known here by construction.
+    importance = dict(zip(X.columns, np.abs(values).mean(axis=0)))
+    assert importance["velocity"] > importance["amount_ratio"] > importance["noise"]

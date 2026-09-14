@@ -480,15 +480,32 @@ const chapter4 = [
   H2("4.5  Explainability"),
   P("Every transaction in the high-risk tier carries the features that drove its score, so " +
     "that an adverse decision can be explained to a reviewer and audited afterwards. " +
-    "Attribution is taken from the strongest tree model rather than from the fused score: " +
-    "telling a reviewer that one base model contributed 0.4 is not a reason, whereas " +
-    "telling them that this device has been seen with eleven different cards is."),
+    "Attribution is taken from the model that makes the decision - here the single model " +
+    "the fusion stage selected - so that every reason code describes a decision that was " +
+    "actually made. An earlier version of this work attributed through a different model " +
+    "from the one deciding, which produced plausible reasons for decisions nobody made; the " +
+    "correction is recorded because a reason code that is merely plausible is not an audit " +
+    "trail."),
+  P("Two properties of these values were verified rather than assumed. The first is local " +
+    "accuracy: for every explained transaction the explainer's base value plus the sum of " +
+    "the feature contributions reconstructs the model's own output, to within 1e-5, and " +
+    "this is now checked on every run. The second concerns what the numbers mean. They are " +
+    "contributions to the model's log-odds before calibration, and because isotonic " +
+    "calibration is monotone they preserve each transaction's ranking and each reason's " +
+    "direction, but not the scale of the displayed risk score. Their baseline is also not " +
+    "the fraud rate: class weighting moves the model's expected output to a 50 per cent " +
+    "class-weighted prior, so a positive contribution means evidence above that prior. A " +
+    "small number of legitimate transactions consequently carry a positive total yet " +
+    "calibrate to low risk, which is the correct behaviour rather than an inconsistency."),
   T(shapRows, [1, 5.5, 3.5]),
   Caption("Table 4.7  Global SHAP attribution over high-risk alerts"),
   ...Figure("reports/figures/shap_importance.png",
     "Figure 4.5  Global SHAP attribution over high-risk alerts"),
-  P("The ranking is dominated by the causal prior-fraud-rate features, followed by the " +
-    "Vesta engineered columns and the per-entity counting features. That the account-level " +
+  P("The ranking is dominated by the causal prior-fraud-rate features at account and card " +
+    "level, followed by the per-entity aggregate ratios, the Vesta engineered columns and the " +
+    "counting features. It is worth noting that attribution explains the model faithfully, " +
+    "including anything the model has over-fitted to, so an unexpected feature in a reason " +
+    "code is a statement about the model rather than a fault in the explanation. That the account-level " +
     "prior fraud rate dominates is intuitive - an account that has already been defrauded " +
     "is the single best predictor that the next transaction on it is fraudulent - but it " +
     "is also a dependency on a labelling assumption, and section 4.9 quantifies what that " +

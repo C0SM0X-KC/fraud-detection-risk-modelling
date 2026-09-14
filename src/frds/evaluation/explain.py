@@ -1,15 +1,30 @@
 """Governance layer (L5): SHAP reason codes.
 
+Two properties of these numbers are easy to misread and worth stating up front.
+
+They explain the model's raw log-odds, before calibration. The analyst sees a
+calibrated 0-100 risk score, but isotonic calibration is a monotone map applied
+afterwards, so it preserves the ordering of transactions and the direction and
+ranking of every reason while changing the scale. A reason code answers "why is
+this transaction ranked where it is", not "how many points of risk did this
+feature add".
+
+The baseline is not the fraud rate. Class weighting at roughly 27:1 moves the
+tree model's expected output to about 0.0 log-odds - a 50% class-weighted prior -
+so a positive contribution means "pushed above that prior", not "pushed above
+the 3.4% prevalence". A handful of legitimate transactions therefore carry a
+positive total yet still calibrate to low risk; that is correct behaviour.
+
 Report objective 5 and gap G4. Every high-risk alert carries the features that
 drove it, expressed as a short ordered list a reviewer can read, so the adverse
 action is auditable rather than asserted.
 
-Attribution is taken from the strongest tree model rather than from the fused
-score. The fusion step is a linear combination of four base scores; explaining
-it in terms of "xgboost contributed 0.4" tells a reviewer nothing, whereas
-"velocity on this card in the last hour: 11 transactions" is an actual reason.
-The meta-learner weights are reported separately so the two levels are both
-visible.
+Attribution is taken from the model that makes the decisions. When the fusion
+stage selects a single tree model over the stack, that model is explained
+directly, so every reason code describes a decision that was actually made.
+Only when the stack itself is selected - a linear combination of base scores,
+where "xgboost contributed 0.4" would tell a reviewer nothing - is the strongest
+tree model used as a proxy, and the evaluation summary records that it was.
 """
 
 from __future__ import annotations
@@ -31,7 +46,18 @@ def tree_shap_values(model, X: pd.DataFrame, background_size: int = 2000) -> np.
         estimator = model.named_steps.get("estimator", model)
 
     explainer = shap.TreeExplainer(estimator)
-    values = explainer.shap_values(X, check_additivity=False)
+    # Additivity is the property that makes a reason code trustworthy: the base
+    # value plus every contribution must reconstruct the model's own output. It
+    # is checked by default and was previously switched off for no reason - on
+    # this model it holds to within 1e-5. The fallback exists only for models
+    # where float precision in categorical splits trips the check spuriously,
+    # and it says so rather than passing silently.
+    try:
+        values = explainer.shap_values(X, check_additivity=True)
+    except Exception as exc:  # pragma: no cover - model-dependent
+        log.warning("SHAP additivity could not be confirmed (%s); explaining "
+                    "without the check", str(exc)[:120])
+        values = explainer.shap_values(X, check_additivity=False)
 
     # Binary classifiers return either one array or a list of two.
     if isinstance(values, list):
@@ -78,12 +104,17 @@ def reason_codes(
             value = X.iloc[pos, j]
             value_str = f"{value:.4g}" if isinstance(value, (int, float, np.number)) and pd.notna(value) else str(value)
             reasons.append(f"{names[j]}={value_str} (+{contributions[j]:.4f})")
+        # The top feature must be evidence *for* the hold. On a clearly legitimate
+        # row every contribution is negative, and the largest is then just the
+        # one nearest zero - often a feature carrying no signal at all. Naming it
+        # would contradict the reason string beside it.
+        has_evidence = len(order) and contributions[order[0]] > 0
         records.append(
             {
                 "row": int(pos),
                 "n_reasons": len(reasons),
                 "reason_codes": " | ".join(reasons) if reasons else "no positive contribution",
-                "top_feature": names[order[0]] if len(order) else "",
+                "top_feature": names[order[0]] if has_evidence else "",
                 "total_positive_shap": float(contributions[contributions > 0].sum()),
             }
         )

@@ -247,10 +247,11 @@ with right:
             st.markdown(reason_rows(parse_reasons(codes.iloc[0]["reason_codes"])),
                         unsafe_allow_html=True)
             st.markdown(
-                '<p class="note" style="margin-top:.9rem">Bars are SHAP '
-                "contributions to this score. Only features that pushed it "
-                "upward are listed: a reviewer asking why a transaction was "
-                "held needs the evidence for the hold.</p>",
+                '<p class="note" style="margin-top:.9rem">Each bar is a SHAP '
+                "contribution to the model's log-odds, before calibration. "
+                "Calibration keeps the ranking, so these explain why the entry "
+                "ranks where it does, not how many risk points each feature "
+                "added. Only features pushing toward a hold are listed.</p>",
                 unsafe_allow_html=True,
             )
 

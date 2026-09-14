@@ -326,13 +326,31 @@ def _explain_stage(cfg, X, test_pos, risk, policy, tables_dir, figures_dir) -> d
     from .models.registry import build
 
     model_dir = cfg.path("artifacts") / "models"
-    preferred = [n for n in ("lightgbm", "xgboost", "random_forest")
-                 if (model_dir / f"{n}.joblib").exists()]
-    if not preferred:
-        log.warning("no tree model saved; skipping SHAP")
-        return {"skipped": "no tree model available"}
 
-    name = preferred[0]
+    # Explain the model that actually makes the decisions. The fusion stage may
+    # select a single base model over the stack, and a reason code describing
+    # any other model would be explaining a decision nobody made. Only when the
+    # stack itself is selected - which has no single tree to attribute through -
+    # do we fall back to the strongest available tree model, and say so.
+    from .utils import read_json
+
+    fusion_path = cfg.path("reports") / "metrics" / "fusion_summary.json"
+    selected = read_json(fusion_path).get("selected_score") if fusion_path.exists() else None
+    tree_models = ("xgboost", "lightgbm", "random_forest")
+
+    if selected in tree_models and (model_dir / f"{selected}.joblib").exists():
+        name, faithful = selected, True
+    else:
+        available = [n for n in tree_models if (model_dir / f"{n}.joblib").exists()]
+        if not available:
+            log.warning("no tree model saved; skipping SHAP")
+            return {"skipped": "no tree model available"}
+        name, faithful = available[0], False
+        log.warning(
+            "decision layer uses '%s', which has no single tree to attribute "
+            "through; reason codes are taken from %s as a proxy", selected, name,
+        )
+
     scorer_cls = type(build(name, cfg))
     scorer = scorer_cls.load(model_dir / f"{name}.joblib")
 
@@ -360,6 +378,9 @@ def _explain_stage(cfg, X, test_pos, risk, policy, tables_dir, figures_dir) -> d
     log.info("reason codes written for %d alerts (model: %s)", len(local), name)
     return {
         "model": name,
+        "explains_decision_model": faithful,
+        "decision_model": selected,
+        "output_space": "log-odds before calibration",
         "alerts_explained": int(len(local)),
         "top_features": glob.head(10).to_dict(orient="records"),
         "sample_reason_codes": local.head(5).to_dict(orient="records"),
