@@ -1,10 +1,4 @@
-"""Shared PyTorch plumbing for the sequence and graph tiers.
-
-Kept deliberately small: device selection, a standardising scaler that lives
-with the model, and one training loop with early stopping on validation AUC-PR.
-Both deep tiers use the same loop, so a difference in their results is a
-difference in the model rather than in how hard each was trained.
-"""
+"""Shared PyTorch plumbing for the sequence and graph tiers."""
 
 from __future__ import annotations
 
@@ -28,11 +22,7 @@ def get_device(prefer_gpu: bool = True):
 
 @dataclass
 class StandardScalerNP:
-    """Median-impute then standardise. Fitted statistics travel with the model.
-
-    sklearn's StandardScaler would do, but it does not impute, and a NaN
-    reaching a tensor turns the whole loss into NaN with no useful error.
-    """
+    """Median-impute then standardise. Fitted statistics travel with the model."""
 
     mean_: np.ndarray | None = None
     scale_: np.ndarray | None = None
@@ -81,15 +71,7 @@ def train_loop(
     shuffle: bool = True,
     label: str = "model",
 ) -> dict:
-    """Train with BCE-on-logits, early-stopping on validation AUC-PR.
-
-    ``forward_batch(indices) -> logits`` is supplied by the caller, which is
-    what lets the sequence tier and the graph tier share this loop despite
-    assembling their inputs completely differently.
-
-    ``shuffle=False`` matters for the graph tier: its entity memories are
-    updated in time order, so batches must arrive in time order too.
-    """
+    """Train with BCE-on-logits, early-stopping on validation AUC-PR."""
     import torch
 
     device = device or get_device()

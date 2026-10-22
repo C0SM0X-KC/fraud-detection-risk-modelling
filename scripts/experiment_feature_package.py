@@ -1,22 +1,5 @@
 """Do the behavioural improvements earn their place, under a realistic delay?
 
-Three changes are tested here, added one at a time so that each can be judged
-on its own rather than as part of an undifferentiated bundle:
-
-    aggregates  per-entity running means and this row's ratio to them, plus two
-                alternative account definitions frequency-encoded
-    recency     exponentially down-weight older training rows
-    refit       after early stopping fixes the iteration count, refit on
-                train + validation before scoring test
-
-All three are behavioural rather than label-derived, which is the reason they
-are worth testing: the report's headline figure depends heavily on fraud
-outcomes being confirmed instantly, and improvements that only show up in that
-setting improve a number already argued to be optimistic. So the ladder is run
-at a 30-day label-confirmation delay, which is the setting that corresponds to
-something deployable, and the final configuration is also run without delay so
-it can be placed in the main comparison table.
-
     python scripts/experiment_feature_package.py
 """
 
@@ -42,10 +25,7 @@ log = get_logger("frds.package")
 OUT_ROOT = REPO_ROOT / "reports" / "experiment_feature_package"
 MODELS = ["xgboost", "lightgbm"]
 
-#: Set from the outcome of scripts/experiment_stationarity.py: at a 30-day
-#: delay it was worth +0.043 AUC-PR to XGBoost and +0.004 to LightGBM, and
-#: was neutral without delay. Kept on - it never hurt materially, it lowers
-#: measured drift, and it brings the two models into closer agreement.
+#: Kept on: it helped at a 30-day delay and lowers measured drift.
 STATIONARISE = True
 
 BASE = {"features.stationarise": STATIONARISE}

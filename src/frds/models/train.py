@@ -1,35 +1,4 @@
-"""Model layer orchestration (L3).
-
-Produces, for every enabled scorer, three aligned score vectors:
-
-  oof    out-of-fold scores over the tail of the train span, from expanding
-         time-window folds. These are what the stacking meta-learner is fitted
-         on - using in-sample train scores would teach the meta-learner that
-         the strongest base model is always right.
-  valid  scores on the validation span, used to choose between candidate
-         scores and to fit the calibrator.
-
-         When ``split.refit_on_valid`` is on, the validation span is itself cut
-         in two. The earlier part joins the training data for a final refit -
-         on a chronological split it is the data closest in time to the test
-         period, and withholding it wastes the most relevant rows. The later
-         part is held back entirely, and the refitted model scores it. That
-         keeps one property that matters more than the extra data: everything
-         the calibrator and the selector see comes from the *same* model, on
-         rows that model never trained on. Refitting without that holdout
-         calibrates one distribution and applies the curve to another.
-  test   scores on the held-out final span. Reported, never fitted on.
-
-Base models are therefore fitted ``n_oof_folds + 1`` times each, which is the
-standard price of honest stacking.
-
-A full run over IEEE-CIS takes hours, so each model's scores are checkpointed
-to ``artifacts/scores/`` the moment it finishes. Re-running the stage reuses
-any checkpoint whose fingerprint still matches the current data, split and
-fold count, and refits only what is missing. Change the features, the split or
-the fold count and every checkpoint is invalidated automatically - a stale
-score vector silently reused would be far worse than a slow rerun.
-"""
+"""Model layer orchestration (L3)."""
 
 from __future__ import annotations
 
@@ -99,13 +68,7 @@ def split_validation_span(
     valid_idx: np.ndarray, time_values: np.ndarray, cfg: Config,
     y: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Cut the validation span into (refit part, calibration holdout).
-
-    The cut is chronological and made on the time value, so a single instant
-    never straddles it. With the refit disabled, or a holdout fraction of zero,
-    the whole span is the calibration set and nothing is used for refitting -
-    which reproduces the original protocol exactly.
-    """
+    """Cut the validation span into (refit part, calibration holdout)."""
     if not bool(cfg.get("split.refit_on_valid", False)):
         return np.empty(0, dtype=valid_idx.dtype), valid_idx
 
@@ -123,10 +86,7 @@ def split_validation_span(
         log.warning("validation span too short to cut; using it all for calibration")
         return np.empty(0, dtype=valid_idx.dtype), valid_idx
 
-    # Isotonic regression on a handful of positives fits noise, and the risk
-    # tiers derived from it are then worse than no calibration at all. Below the
-    # floor, keep the whole span for calibration and skip the refit: the extra
-    # training rows are not worth a meaningless calibration curve.
+    # Too few positives to calibrate reliably: keep the whole span for calibration, skip the refit.
     minimum = int(cfg.get("split.min_calibration_positives", 200))
     if y is not None:
         positives = int(np.sum(y[holdout]))
@@ -149,13 +109,7 @@ def split_validation_span(
 def _fingerprint(
     X: pd.DataFrame, split: SplitIndex, cfg: Config, n_folds: int
 ) -> str:
-    """Identity of the run a checkpoint belongs to.
-
-    Covers everything that would change what a score vector means: the feature
-    matrix shape and column names, the three span sizes, the fold count and the
-    imbalance strategy. Model hyper-parameters are excluded on purpose - they
-    are keyed per model, and each model's checkpoint records its own.
-    """
+    """Identity of the run a checkpoint belongs to."""
     payload = {
         "rows": int(len(X)),
         "columns": list(X.columns),
@@ -164,9 +118,7 @@ def _fingerprint(
         "test": int(len(split.test)),
         "n_folds": int(n_folds),
         "imbalance": str(cfg.get("imbalance.method", "class_weight")),
-        # These change what the stored score vectors mean, so they have to
-        # invalidate a checkpoint. Leaving them out silently reuses scores from
-        # a different protocol.
+        # Protocol settings that change stored scores, so they invalidate a checkpoint.
         "refit_on_valid": bool(cfg.get("split.refit_on_valid", False)),
         "calibration_holdout_frac": float(cfg.get("split.calibration_holdout_frac", 0.0)),
         "recency_half_life_days": cfg.get("imbalance.recency_half_life_days"),
@@ -247,22 +199,7 @@ def _refit_including_valid(
     fallback_valid: np.ndarray,
     fallback_test: np.ndarray,
 ) -> tuple[BaseScorer, np.ndarray, np.ndarray]:
-    """Refit on train + the earlier part of validation, then re-score.
-
-    On a chronological split the validation span is the data closest in time to
-    the test period, so withholding all of it from the final model wastes the
-    rows most likely to resemble what the model will face.
-
-    Both the calibration holdout and the test span are re-scored by the refitted
-    model. That is the point of the holdout: the calibrator is then fitted on
-    exactly the distribution it will be applied to, by the same model, on rows
-    that model never trained on. Refitting without a holdout derives the
-    calibration curve from one model and applies it to another, which measurably
-    degrades the risk tiers.
-
-    The iteration count found during early stopping is reused and early stopping
-    is switched off, because there is no longer a clean set to stop against.
-    """
+    """Refit on train + the earlier part of validation, then re-score."""
     best_iter = getattr(fitted.model, "best_iteration", None)
     if best_iter is None:
         best_iter = getattr(fitted.model, "best_iteration_", None)
@@ -303,11 +240,7 @@ def train_base_models(
     entity_keys: dict[str, np.ndarray] | None = None,
     force_refit: bool = False,
 ) -> tuple[dict[str, ScoreSet], np.ndarray]:
-    """Fit every enabled scorer and return its three score vectors.
-
-    Also returns ``oof_positions``: the positions (into the full frame) that
-    the out-of-fold scores correspond to.
-    """
+    """Fit every enabled scorer and return its three score vectors."""
     y_arr = y.to_numpy()
     names = list(cfg.require("models.enabled"))
     n_folds = int(cfg.require("split.n_oof_folds"))
@@ -332,7 +265,7 @@ def train_base_models(
     )
 
     for name in names:
-        params = dict(cfg.get(f"models.{name}", {}) or {})
+        params = registry.model_params(name, cfg)
         if not force_refit:
             cached = load_checkpoint(cfg, name, fingerprint, params)
             if cached is not None:

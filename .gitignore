@@ -1,3 +1,10 @@
+# Secrets: API tokens (Kaggle, Hugging Face) live here, never in git.
+.env
+
+# Demo bundles carry features derived from the IEEE-CIS competition data, which
+# Kaggle's rules do not allow redistributing; they are shared separately.
+fraud-detection-demo-bundle*/
+
 # Environments and caches
 .venv/
 node_modules/
@@ -30,3 +37,10 @@ mlruns/
 
 # editor/tooling config
 .claude/
+
+# Phase-1 review deck: superseded, not part of the submission.
+Phase-1_Fraud_Detection_Presentation.pptx
+
+# Local working notes, not part of the project.
+CLAUDE.md
+docs/PROJECT_STATUS.md

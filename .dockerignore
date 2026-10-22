@@ -1,0 +1,7 @@
+# The build context needs only the requirement files and the checksum
+# verifier; everything else is mounted at run time. Keeping data, models and
+# secrets out of the context keeps them out of every image layer.
+*
+!requirements.txt
+!requirements-extra.txt
+!docker/verify_wheels.py

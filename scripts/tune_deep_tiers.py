@@ -1,25 +1,5 @@
 """Hyper-parameter search for the sequential and relational tiers.
 
-In the main run the LSTM scored AUC-PR 0.095 and the heterogeneous GNN 0.110,
-against 0.848 for XGBoost, and the stacking meta-learner gave both negative
-weights. Before that goes into a results chapter as "relational and sequential
-signal did not help on this benchmark", the tiers deserve a real attempt -
-otherwise the finding is about the training budget, not about the data.
-
-One hypothesis is worth stating up front. The sequence tier was built over
-``uid``, the synthetic account id, and IEEE-CIS has 273,825 of those across
-590,540 rows - roughly two transactions each. There is no sequence there to
-model. Grouping by ``card1`` instead gives about 43 transactions per entity,
-which is a sequence. That single change may matter more than any width or
-depth setting, so the search covers it explicitly.
-
-Selection is on the **validation** span. The test span is scored for the
-chosen configuration only, and is never used to choose anything.
-
-Each candidate is fitted once on the training span - the out-of-fold folds are
-skipped, since they only feed the stacking meta-learner and play no part in
-selecting hyper-parameters.
-
     python scripts/tune_deep_tiers.py
 """
 
@@ -47,9 +27,7 @@ log = get_logger("frds.tune")
 
 OUT_ROOT = REPO_ROOT / "reports" / "tuning"
 
-#: Candidate grids. Kept small and deliberate rather than exhaustive - the aim
-#: is to find out whether these tiers can work at all, not to squeeze the last
-#: thousandth out of them.
+#: Small candidate grids: enough to tell whether these tiers can work at all.
 GRIDS: dict[str, dict[str, list]] = {
     "lstm": {
         "entity": ["card", "uid"],

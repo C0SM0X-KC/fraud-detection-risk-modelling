@@ -1,8 +1,4 @@
-"""Baseline tier: logistic regression and random forest.
-
-Report Table 4.2 keeps these deliberately. A comparison without a floor cannot
-show that the graph and sequence tiers earn their complexity.
-"""
+"""Baseline tier: logistic regression and random forest."""
 
 from __future__ import annotations
 

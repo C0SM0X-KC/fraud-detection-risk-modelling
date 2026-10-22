@@ -1,6 +1,4 @@
-# Financial Transaction Fraud Detection and Risk Modelling
-# Single source of truth for the Phase-3 implementation.
-# Every number here traces back to a table in the Phase-1/2 report.
+# Fraud detection and risk modelling: the configuration for every stage.
 
 project:
   name: frds
@@ -38,27 +36,11 @@ split:
   # Expanding-window folds inside the train span, used to produce the
   # out-of-fold base-model predictions the stacker consumes.
   n_oof_folds: 5
-  # After early stopping has chosen an iteration count, refit the final
-  # model on train + validation before scoring test. On a chronological
-  # split the validation span is the data closest in time to the test
-  # period, so withholding it from the final fit wastes the most relevant
-  # rows. The calibrator still uses pre-refit validation scores.
-  # After early stopping fixes the iteration count, refit the final model on
-  # the training span plus the earlier part of validation. On a chronological
-  # split that is the data closest in time to the test period, so withholding
-  # it wastes the most relevant rows. Worth +0.036 AUC-PR under a 30-day label
-  # delay (scripts/experiment_feature_package.py).
+  # After early stopping, refit on train + the earlier part of validation (closest to test).
   refit_on_valid: true
-  # Fraction of the validation span held back from the refit. The refitted
-  # model scores this holdout, and those scores are what the calibrator is
-  # fitted on and what the decision layer selects against - so both see the
-  # same model on rows it never trained on. Refitting without a holdout
-  # calibrates one distribution and applies the curve to another, which
-  # measurably degrades the tiers.
+  # Share of validation held back from the refit; calibration and score selection use it.
   calibration_holdout_frac: 0.3
-  # If the holdout would contain fewer fraud cases than this, calibration
-  # would be fitting noise; the refit is skipped and the whole validation
-  # span is used for calibration instead.
+  # Fewer fraud cases than this in the holdout: skip the refit, calibrate on all of validation.
   min_calibration_positives: 200
 
 features:
@@ -75,41 +57,32 @@ features:
   rolling_amount_windows: [5, 20]          # last-N transactions per entity
   min_category_frequency: 20               # rarer levels collapse to __rare__
   max_v_columns: 120                       # V1..V339 reduced by NaN-group + corr
-  # Fraud outcomes are not known the instant the fraud happens - a chargeback
-  # takes weeks. This withholds a label from the target-encoding features until
-  # this many days after its transaction. 0 = the optimistic assumption stated
-  # in report section 4.3; set 30 or 60 to test it.
+  # Days before a label reaches the target-encoding features (0 = known immediately).
   label_delay_days: 0
   # Drop the per-entity prior-fraud-rate features altogether (ablation).
   disable_target_encoding: false
-  # Re-express time-growing features so their distribution does not move
-  # simply because time has passed: drop the raw day index, anchor the D
-  # columns to a fixed origin, and turn cumulative counters into rates and
-  # shares. Measured in scripts/experiment_stationarity.py.
+  # Make time-growing features stationary (no day index, anchored D columns, rates).
   stationarise: true
-  # Per-entity running means and this row's ratio to them. Behavioural
-  # rather than label-derived, so unlike the prior-fraud-rate features they
-  # should survive a label-confirmation delay.
+  # Per-entity running means and this row's ratio to them (behavioural, not label-derived).
   entity_aggregates: true
   aggregate_entities: [uid, card, device]
   aggregate_value_columns: [TransactionAmt, D2, D10, D15, C1, C13]
+  # Per-account profile features; evaluated and not adopted (report section 4.11).
+  account_profile: false
+  profile_value_columns: [C2, C5, C6, C9, C11, C14, D1, D3, D4, D5, D11, dist1,
+                          V258, V294, V307, V317, id_02]
   drop_null_threshold: 0.90                # drop columns with >90% missing
 
 imbalance:
   # Report Table 4.1 step A.5: training fold only, never validation or test.
   method: class_weight                     # class_weight | smote | adasyn | none
   sampling_strategy: 0.10                  # minority:majority ratio if resampling
-  # Exponentially down-weight older training rows: the number of days over
-  # which a row's influence halves. null disables it. Fraud is
-  # non-stationary, so a day-1 pattern is weaker evidence about the
-  # deployment period than a day-120 one.
+  # Half-life in days for down-weighting older training rows; null disables it.
   recency_half_life_days: null
 
 models:
-  # One representative per tier of report Table 4.2. 'tcn' is the alternative
-  # sequential head and 'tabpfn' needs `pip install tabpfn`; add either to this
-  # list to include it in the benchmark.
-  enabled: [logistic_regression, random_forest, xgboost, lightgbm, lstm, hetero_gnn]
+  # Tiers in the benchmark. Optional: 'tcn' (sequence head), 'tabpfn' (pip install tabpfn).
+  enabled: [logistic_regression, random_forest, xgboost, lightgbm, catboost, lstm, hetero_gnn]
   logistic_regression:
     C: 0.1
     max_iter: 2000
@@ -138,9 +111,14 @@ models:
     colsample_bytree: 0.6
     reg_lambda: 1.0
     early_stopping_rounds: 100
-  # Selected by the grid search in scripts/tune_deep_tiers.py on the
-  # VALIDATION span. See report section 4.8: no configuration in the grid
-  # lifted test AUC-PR above 0.11 for either tier.
+  # Hand-set like the other boosters; Optuna tuning did not transfer to test.
+  catboost:
+    n_estimators: 3000
+    learning_rate: 0.05
+    depth: 8
+    l2_leaf_reg: 3.0
+    early_stopping_rounds: 100
+  # lstm and hetero_gnn: chosen on validation by scripts/tune_deep_tiers.py.
   lstm:
     entity: uid          # sequences are built per synthetic account
     window: 24           # transactions of history shown to the model
@@ -172,17 +150,17 @@ models:
     batch_size: 2000
 
 tuning:
-  enabled: false
+  # `python -m frds tune` runs an Optuna TPE search on the validation fold and
+  # writes artifacts/tuned_params.json. use_tuned makes training use it.
+  use_tuned: false
   n_trials: 30
-  timeout_seconds: 3600
+  timeout_seconds: 3600              # per model
+  negative_sample_frac: 0.3          # training negatives kept during the search
 
 fusion:
   meta_learner: logistic_regression        # trained on out-of-fold base scores
   calibration: isotonic                    # report section 4.6
-  # Carry forward whichever of the stacked score and the individual base
-  # scores wins on the VALIDATION span. Stacking is always fitted and
-  # always reported; this decides only what the decision layer consumes.
-  # Set false to force the stacked score even when it loses.
+  # Use whichever score wins on validation; the stack is always fitted and reported.
   select_on_validation: true
   # Below this many fraud cases in the calibration set, isotonic regression
   # fits noise; Platt scaling is used instead.
@@ -212,5 +190,50 @@ evaluation:
   psi_bins: 10
   psi_alert_threshold: 0.25
   latency_sample_size: 5000
+  # p95 target for the product path (online features to decision); reasons timed separately.
+  latency_target_ms: 100
+  latency_single_samples: 500
+  latency_batch_size: 256
   shap_max_display: 15
   shap_background_size: 2000
+
+robustness:
+  # `python -m frds robustness`: features an attacker controls through their own transaction.
+  mutable_features:
+    - "^amt_"
+    - "^TransactionAmt$"
+    - "^roll_.*_amt_(z|ratio)$"
+    - "^agg_.*_TransactionAmt_ratio$"
+    - "^txn_hour$"
+    - "^mismatch_"
+    - "^missing_(r_email|device|geo)$"
+    - "^dist[12]$"
+    - "^(freq|cat)_(P_emaildomain|R_emaildomain|DeviceInfo|DeviceType)$"
+    - "^(freq|cat)_id_"
+    - "^id_"
+  # Budget in training std devs; 0.0 is a control for the encode/decode round trip.
+  epsilons: [0.0, 0.1, 0.25, 0.5, 1.0]
+  pgd_steps: 30
+  max_attacked: 2000                  # caught frauds attacked per setting
+
+transfer:
+  # `python -m frds baf`: the same protocol on the Bank Account Fraud suite
+  # (report Table 3.4, secondary dataset).
+  baf_file: baf/Base.csv
+  target_col: fraud_bool
+  month_col: month
+  train_months: [0, 1, 2, 3, 4, 5]
+  valid_months: [6]
+  test_months: [7]
+  models: [logistic_regression, xgboost, lightgbm]
+  # BAF's own fairness check: false-positive-rate parity between applicants
+  # under and over this age, at the threshold giving 5 % overall FPR.
+  fairness_age_threshold: 50
+  fairness_fpr: 0.05
+
+tracking:
+  # MLflow experiment tracking (report Table 4.6). Off by default; needs
+  # `pip install mlflow-skinny`. Runs are written under mlruns/.
+  mlflow: false
+  uri: mlruns
+  experiment: frds

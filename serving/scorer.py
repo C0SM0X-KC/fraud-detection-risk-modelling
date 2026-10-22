@@ -1,18 +1,4 @@
-"""The serving path: features in, risk decision out.
-
-This is the deployed half of the decision layer. It loads exactly what the
-fusion stage chose and nothing more - which, when that stage selects a single
-model over the stack, means the demo loads one model rather than six. That is
-not a shortcut: it is what the evaluated system actually decided to use, and
-serving the five tiers it rejected would misrepresent it.
-
-The one asymmetry worth knowing is the graph tier. Its scores depend on entity
-memories that accumulate as traffic flows past, so it cannot be loaded cold and
-asked about a single transaction. If the decision layer selects it (or selects
-the stack, which contains it), the memories are warmed to the start of the
-replay window first, and scoring then advances them online - which is how a
-live deployment would run it.
-"""
+"""The serving path: features in, risk decision out."""
 
 from __future__ import annotations
 
@@ -31,6 +17,8 @@ from frds.fusion.stacking import StackingMetaLearner
 from frds.models.graph import HeteroGNNScorer
 from frds.models.registry import build
 from frds.models.sequence import SequenceScorer
+from frds.fusion.stacking import load_combiner
+from frds.product import FastTree, make_explainer
 from frds.utils import get_logger, read_json
 
 log = get_logger("frds.serving")
@@ -68,18 +56,35 @@ class FraudScorer:
         self.calibration_method: str = summary.get("calibration_method", "isotonic")
 
         self.calibrator = ProbabilityCalibrator.load(artifacts / "calibrator.joblib")
-        self.meta: StackingMetaLearner | None = None
-        self.model_names: list[str] = []
         self.models: list = []
-
-        if self.selected == "stacked":
-            self.meta = StackingMetaLearner.load(artifacts / "meta_learner.joblib")
-            self.model_names = list(self.meta.model_names)
-        else:
-            self.model_names = [self.selected]
+        self.meta = load_combiner(artifacts, self.selected)
+        self.model_names = (list(self.meta.model_names) if self.meta is not None
+                            else [self.selected])
 
         self._load_models(warm_to)
         self.policy: TierPolicy = policy_from_config(self.cfg)
+
+        # Native single-row prediction and TreeSHAP for the tree tiers; the
+        # sequence and graph tiers keep their own scoring paths.
+        self.fast = [
+            None if isinstance(m, (SequenceScorer, HeteroGNNScorer)) else FastTree(m)
+            for m in self.models
+        ]
+        trees = [f for f in self.fast if f is not None]
+        self.explainer = (make_explainer(trees, self.meta)[0]
+                          if len(trees) == len(self.fast) else
+                          next((f for f in trees if f.explainable), None))
+        state = read_json(self.cfg.path("processed") / "feature_spec.json")
+        self.categories = None
+        try:
+            from frds.features.online import load_state
+
+            fitted = load_state(self.cfg)["fitted"]
+            self.categories = {c: v["categories"]
+                               for c, v in fitted.get("categoricals", {}).items()}
+        except (FileNotFoundError, RuntimeError):
+            pass
+        self.n_features = int(state.get("n_features", self.X.shape[1]))
         log.info(
             "serving '%s' (%s calibration), tiers medium>=%d high>=%d",
             self.selected, self.calibration_method,
@@ -108,9 +113,11 @@ class FraudScorer:
     # -- scoring --------------------------------------------------------
     def base_scores(self, frame: pd.DataFrame) -> np.ndarray:
         columns = []
-        for scorer in self.models:
+        for scorer, fast in zip(self.models, self.fast):
             if isinstance(scorer, HeteroGNNScorer):
                 columns.append(scorer.predict_online(frame))
+            elif fast is not None:
+                columns.append(fast.predict(frame))
             else:
                 columns.append(scorer.predict_proba(frame))
         return np.column_stack(columns)
@@ -138,24 +145,18 @@ class FraudScorer:
         return decisions
 
     # -- explanation ----------------------------------------------------
-    def explain_positions(self, positions: np.ndarray, top_k: int = 5) -> pd.DataFrame:
-        """SHAP reason codes for specific rows, from the strongest tree model."""
-        from frds.evaluation.explain import reason_codes, tree_shap_values
+    def explain_position(self, position: int, top_k: int = 5) -> dict | None:
+        """Plain-language reason codes for one row, from the deciding tree model."""
+        from frds.evaluation.reasons import explain_row
 
-        tree = next(
-            (m for m in self.models
-             if not isinstance(m, (SequenceScorer, HeteroGNNScorer))
-             and hasattr(getattr(m, "model", None), "feature_importances_")),
-            None,
-        )
-        if tree is None:
-            return pd.DataFrame()
-
-        subset = self.X.iloc[np.asarray(positions)].reset_index(drop=True)
-        values = tree_shap_values(tree.model, subset)
-        frame = reason_codes(values, subset, np.arange(len(subset)), top_k)
-        frame["position"] = np.asarray(positions)
-        return frame
+        if self.explainer is None:
+            return None
+        frame = self.X.iloc[[int(position)]]
+        values, base = self.explainer.contributions(frame)
+        out = explain_row(values[0], frame.iloc[0], None, self.categories, top_k)
+        out["base_value_log_odds"] = round(float(base[0]), 4)
+        out["explained_model"] = self.explainer.scorer.name
+        return out
 
     # -- helpers --------------------------------------------------------
     def test_positions(self) -> np.ndarray:
@@ -170,6 +171,6 @@ class FraudScorer:
                 "medium": self.policy.medium_lo,
                 "high": self.policy.high_lo,
             },
-            "features": int(self.X.shape[1]),
+            "features": self.n_features,
             "test_rows": int(len(self.split.test)),
         }

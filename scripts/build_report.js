@@ -1,13 +1,5 @@
 /**
- * Builds the Phase-3 thesis report as a .docx.
- *
- *     node scripts/build_report.js
- *
- * The document is assembled from three modules: shared helpers and front
- * matter, Chapters 1-2 (the specification agreed at the earlier reviews), and
- * Chapters 3-5 plus back matter (the methodology, the measured results and the
- * conclusions drawn from them). Chapter 4 reads its numbers from reports/ at
- * build time, so the prose cannot drift away from the run that produced it.
+ * Builds the Phase-3 report as a .docx:  node scripts/build_report.js
  */
 
 const fs = require("fs");

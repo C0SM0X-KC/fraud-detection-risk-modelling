@@ -1,13 +1,4 @@
-/**
- * Chapter bodies for the Phase-3 report.
- *
- * Chapters 1-3 carry forward the specification agreed at the earlier reviews.
- * Chapter 4 is generated from the metric files the pipeline writes, so the
- * document cannot drift away from the run that produced it. Chapter 5 draws
- * the conclusions those results support.
- *
- * Entry point is scripts/build_report.js.
- */
+/** Chapters 1 and 2 of the Phase-3 report. */
 
 const R = require("./report_frontmatter.js");
 const {
@@ -53,7 +44,7 @@ const chapter1 = [
     "This project addresses both halves."),
 
   H2("1.2  Present-Day Scenario"),
-  P("The state of practice has changed substantially between 2023 and 2026, and four " +
+  P("The state of practice has changed substantially between 2023 and 2026, and three " +
     "developments are directly relevant to this work."),
   ...Bullets([
     "Streaming detection has become routine. Stream-processing pipelines built on Apache " +
@@ -63,10 +54,6 @@ const chapter1 = [
     "neural networks applied over graphs of cards, merchants, devices and addresses expose " +
     "coordinated multi-account behaviour that a tabular classifier examining one row at a " +
     "time cannot see.",
-    "Tabular foundation models have emerged as a serious alternative to gradient boosting. " +
-    "TabPFN v2, published in Nature in 2025, performs in-context inference over a learned " +
-    "prior and matches or exceeds tuned gradient-boosted trees on small to medium tables in " +
-    "a single forward pass.",
     "The open problems have shifted from raw accuracy to robustness and accountability. " +
     "Concept drift, adversarial robustness and explainability are now the recurring " +
     "limitations named in survey papers.",
@@ -81,8 +68,8 @@ const chapter1 = [
     "conversion from a score into an action unspecified, which is precisely the part a " +
     "fraud operation consumes."),
   P("The motivation for this work is therefore not to propose a new architecture. It is to " +
-    "build one pipeline in which several model families are compared under a single honest " +
-    "protocol, in which the output is calibrated and priced against the actual costs of the " +
+    "build one pipeline in which several model families are compared under a single " +
+    "time-ordered protocol, in which the output is calibrated and priced against the actual costs of the " +
     "two error types, and in which the assumptions that inflate reported performance are " +
     "measured rather than left implicit."),
 
@@ -98,9 +85,9 @@ const chapter1 = [
     "rolling aggregate statistics of transaction amount, recency measures, device and " +
     "geolocation mismatch indicators, and to construct a heterogeneous card-merchant-device " +
     "transaction graph from the same data. (Addresses G2.)",
-    "To benchmark five model families - classical classifiers, gradient boosting, " +
-    "sequential models, a heterogeneous graph neural network and a tabular foundation " +
-    "model - under one identical evaluation protocol. (Addresses G2.)",
+    "To benchmark four model families - classical classifiers, gradient boosting, " +
+    "sequential models and a heterogeneous graph neural network - under one identical " +
+    "evaluation protocol. (Addresses G2.)",
     "To fuse the base model scores through a stacking meta-learner, calibrate the fused " +
     "output with isotonic regression, and convert the calibrated probability into a bounded " +
     "0-100 risk score with cost-sensitive Low, Medium and High tiers mapped to defined " +
@@ -168,7 +155,7 @@ const chapter2 = [
     "as a risk measure."),
 
   H2("2.2  Background Theory"),
-  P("Four families of technique recur across the reviewed work. Ensemble methods over " +
+  P("Three families of technique recur across the reviewed work. Ensemble methods over " +
     "decision trees, principally random forests, gradient boosting machines and their " +
     "modern implementations XGBoost and LightGBM, remain the strongest single family on " +
     "tabular transaction data because they capture higher-order interactions among " +
@@ -181,10 +168,7 @@ const chapter2 = [
     "Graph neural networks operate on a heterogeneous graph in which transactions, cards, " +
     "merchants and devices are distinct node types; message passing over this graph " +
     "propagates suspicion from a known fraudulent node to its neighbours, which is the " +
-    "mechanism by which organised rings are exposed. Tabular foundation models such as " +
-    "TabPFN v2 reframe supervised learning as in-context inference: the model is pretrained " +
-    "on millions of synthetic tabular tasks and, at inference, conditions on the training " +
-    "set supplied as context rather than updating any parameters."),
+    "mechanism by which organised rings are exposed."),
   P("Two auxiliary techniques are used throughout. Class imbalance is addressed either at " +
     "the data level, using synthetic minority oversampling such as SMOTE or ADASYN, or at " +
     "the algorithm level, using class weights and cost-sensitive loss functions. " +
@@ -193,8 +177,8 @@ const chapter2 = [
     "allocation, and which is therefore able to produce a per-alert reason code."),
 
   H2("2.3  Literature Survey"),
-  P("Eight studies published between 2023 and 2026 were reviewed, six of them from 2024 " +
-    "onwards. They were selected to span the four technique families described above and to " +
+  P("Seven studies published between 2023 and 2026 were reviewed, six of them from 2024 " +
+    "onwards. They were selected to span the three technique families described above and to " +
     "include both primary experimental work and recent systematic reviews."),
   T([
     ["Author / Year", "Technique", "Dataset", "Key Result", "Limitation"],
@@ -204,17 +188,14 @@ const chapter2 = [
     ["Motie and Raahemi (2024) [3]", "Systematic review of GNNs for financial fraud",
       "Multiple benchmarks", "Graph structure exposes organised fraud rings",
       "Scalability and real-time inference unresolved"],
-    ["Zhao et al. (2024) [8]", "Improved LightGBM for extremely imbalanced data",
+    ["Zhao et al. (2024) [7]", "Improved LightGBM for extremely imbalanced data",
       "Credit-card transactions", "Strong recall at low computational cost",
       "Purely tabular; ignores relational signal"],
-    ["Alarfaj and Shahzadi (2024) [7]", "GNN combined with autoencoders", "Real-time card data",
+    ["Alarfaj and Shahzadi (2025) [6]", "GNN combined with autoencoders", "Real-time card data",
       "Improved real-time fraud prevention", "Sensitive to the reconstruction threshold chosen"],
-    ["Hollmann et al. (2025) [4]", "TabPFN v2 tabular foundation model",
-      "Broad tabular benchmark suite", "Exceeds tuned GBDTs in a single forward pass",
-      "Practical limit near 10,000 rows; untested at fraud scale"],
-    ["Sha et al. (2025) [5]", "Heterogeneous GNN with graph attention", "IEEE-CIS Fraud Detection",
+    ["Sha et al. (2025) [4]", "Heterogeneous GNN with graph attention", "IEEE-CIS Fraud Detection",
       "Outperforms GCN, GAT and GraphSAGE on AUC-ROC", "High inference cost; static graph snapshot"],
-    ["Hafez et al. (2025) [6]", "Systematic review of AI in card fraud detection", "2015-2024 corpus",
+    ["Hafez et al. (2025) [5]", "Systematic review of AI in card fraud detection", "2015-2024 corpus",
       "Identifies XAI and drift as the top open problems", "Review only; no new model contributed"],
     ["Pandey et al. (2026) [2]", "Thematic synthesis of AI fraud frameworks",
       "Eight peer-reviewed sources", "Kafka-Flink under 50 ms; neuro-symbolic hybrid 98.5 % F1",
@@ -266,7 +247,7 @@ const chapter2 = [
     ["G1", "Evaluation without time",
       "Most studies use random train and test splits, which leak future information into " +
       "training. Fraud is a temporal process, and performance measured under a " +
-      "chronological split is materially lower and more honest."],
+      "chronological split is materially lower and representative of deployment."],
     ["G2", "Tabular-only modelling",
       "Row-wise classifiers cannot observe the card-merchant-device graph, so coordinated " +
       "multi-account fraud rings remain invisible to them."],

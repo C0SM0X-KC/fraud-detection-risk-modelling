@@ -9,7 +9,12 @@
     python -m frds evaluate           metrics, tiers, drift, SHAP, latency
     python -m frds all                every stage in order
 
-Any config key can be overridden inline:
+    python -m frds tune               Optuna search for xgboost and lightgbm
+    python -m frds robustness         PGD transfer attack on the deployed model
+    python -m frds baf                the same protocol on Bank Account Fraud
+    python -m frds stream             replay through the streaming transport
+    python -m frds score '{"TransactionAmt": 950, "card1": 13926}'
+                                      score one raw transaction (the product)
 
     python -m frds all --set data.sample_rows=100000 --set models.enabled='[lightgbm]'
 """
@@ -51,7 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("stage", choices=[
         "acquire", "synth", "prepare", "features", "train", "fuse", "evaluate", "all",
+        "tune", "robustness", "baf", "stream", "score",
     ])
+    parser.add_argument("payload", nargs="?", default=None,
+                        help="score: a transaction as JSON, or @file.json")
     parser.add_argument("--config", default=None, help="path to a YAML config")
     parser.add_argument("--set", dest="overrides", action="append", default=[],
                         metavar="KEY=VALUE", help="override a config key")
@@ -63,12 +71,28 @@ def build_parser() -> argparse.ArgumentParser:
                         help="skip latency measurement during evaluate")
     parser.add_argument("--force-refit", action="store_true",
                         help="ignore per-model score checkpoints and refit everything")
+    parser.add_argument("--models", default="xgboost,lightgbm",
+                        help="tune: comma-separated models to search")
+    parser.add_argument("--trials", type=int, default=None, help="tune: trials per model")
+    parser.add_argument("--transport", choices=["memory", "kafka"], default="memory",
+                        help="stream: in-process queue or a Kafka broker")
+    parser.add_argument("--bootstrap", default="localhost:9092", help="stream: Kafka address")
+    parser.add_argument("--stream-rows", type=int, default=20_000,
+                        help="stream: transactions to replay")
+    parser.add_argument("--rate", type=float, default=0.0,
+                        help="stream: producer rate in transactions/s (0 = unthrottled)")
     parser.add_argument("--quiet", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    try:  # tokens (HF_TOKEN, KAGGLE_API_TOKEN) from .env, if python-dotenv is present
+        from dotenv import load_dotenv
+
+        load_dotenv(REPO_ROOT / ".env")
+    except ImportError:
+        pass
     setup_logging(
         level=logging.WARNING if args.quiet else logging.INFO,
         logfile=REPO_ROOT / "reports" / "run.log",
@@ -94,6 +118,20 @@ def main(argv: list[str] | None = None) -> int:
                       seed=int(cfg.require("project.seed")))
         return 0
 
+    if args.stage == "score":
+        import json
+
+        from .product import DecisionService
+
+        if not args.payload:
+            raise SystemExit("score expects a JSON transaction, e.g. "
+                             "'{\"TransactionAmt\": 950, \"card1\": 13926}'")
+        text = (Path(args.payload[1:]).read_text(encoding="utf-8")
+                if args.payload.startswith("@") else args.payload)
+        decision = DecisionService(cfg).score(json.loads(text), remember=False)
+        print(json.dumps(decision, indent=2, default=str))
+        return 0
+
     dispatch = {
         "prepare": lambda: pipeline.stage_prepare(cfg),
         "features": lambda: pipeline.stage_features(cfg),
@@ -102,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         "evaluate": lambda: pipeline.stage_evaluate(
             cfg, skip_shap=args.skip_shap, skip_latency=args.skip_latency
         ),
+        "tune": lambda: _tune(cfg, args),
+        "robustness": lambda: _robustness(cfg),
+        "baf": lambda: _baf(cfg),
+        "stream": lambda: _stream(cfg, args),
         "all": lambda: pipeline.stage_all(
             cfg, skip_shap=args.skip_shap, skip_latency=args.skip_latency,
             force_refit=args.force_refit,
@@ -111,6 +153,45 @@ def main(argv: list[str] | None = None) -> int:
     log.info("stage '%s' complete; outputs under %s", args.stage,
              Path(cfg.path("reports")).relative_to(REPO_ROOT))
     return 0
+
+
+def _tune(cfg, args):
+    from .models.tuning import tune
+    from .tracking import log_stage
+
+    results = tune(cfg, [m.strip() for m in args.models.split(",") if m.strip()], args.trials)
+    log_stage(cfg, "tune", {f"{m}_validation_auc_pr": r["validation_auc_pr"]
+                            for m, r in results.items()})
+    return results
+
+
+def _robustness(cfg):
+    from .evaluation import robustness
+    from .tracking import log_stage
+
+    frame = robustness.run(cfg)
+    pgd = frame[frame["attack"] == "pgd"]
+    log_stage(cfg, "robustness", {f"evasion_eps_{r.epsilon_std}": r.evasion_rate
+                                  for r in pgd.itertuples()},
+              [cfg.path("reports") / "tables" / "robustness.csv"])
+    return frame
+
+
+def _baf(cfg):
+    from . import transfer
+    from .tracking import log_stage
+
+    table = transfer.run(cfg)
+    log_stage(cfg, "baf", {"best_auc_pr": float(table["auc_pr"].max())},
+              [cfg.path("reports") / "tables" / "baf_transfer.csv"])
+    return table
+
+
+def _stream(cfg, args):
+    from . import stream
+
+    return stream.run(cfg, transport=args.transport, bootstrap=args.bootstrap,
+                      rows=args.stream_rows, rate=args.rate)
 
 
 if __name__ == "__main__":

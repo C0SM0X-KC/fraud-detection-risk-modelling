@@ -1,13 +1,4 @@
-"""Dataset acquisition for IEEE-CIS Fraud Detection.
-
-Three routes, tried in this order:
-
-1. The files are already in ``data/raw`` -> nothing to do.
-2. ``kaggle`` CLI is installed and authenticated -> download the competition
-   archive and unpack it. This needs the competition rules to have been
-   accepted once on the Kaggle website; the API cannot do that for you.
-3. Neither -> print the manual download instructions and exit non-zero.
-"""
+"""Dataset acquisition for IEEE-CIS Fraud Detection."""
 
 from __future__ import annotations
 

@@ -1,19 +1,4 @@
-"""Sequential tier: LSTM and temporal convolutional network.
-
-Report Table 4.2. The premise is that fraud is a *break in a sequence* rather
-than a property of an isolated row, so this tier sees a card's last K
-transactions in order and is asked whether the current one fits the pattern.
-
-Sequence construction is causal by design. Rows are grouped by entity while
-preserving time order, so the K rows preceding a row inside its own group are
-contiguous in the sorted arrangement and can be gathered without a Python loop.
-Positions earlier than the entity's first transaction are zero-padded and
-masked, so a card's first transaction is never given a fabricated history.
-
-Only a compact behavioural feature set feeds this tier - amount, recency,
-velocity, hour of day. Feeding it all 255 columns would just rebuild the
-boosting tier inside an RNN and destroy the point of the comparison.
-"""
+"""Sequential tier: LSTM and temporal convolutional network."""
 
 from __future__ import annotations
 
@@ -35,12 +20,7 @@ def select_sequence_columns(X: pd.DataFrame, max_columns: int = 24) -> list[str]
 def build_history_index(
     group_codes: np.ndarray, window: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return (index_matrix, mask) of shape (n, window).
-
-    ``index_matrix[i, j]`` is the row position of the j-th step of row i's
-    history, oldest first, with the current row as the final step. ``mask`` is
-    False where the entity had no transaction that far back.
-    """
+    """Return (index_matrix, mask) of shape (n, window)."""
     n = len(group_codes)
     order = np.argsort(group_codes, kind="stable")
     g = group_codes[order]
@@ -68,10 +48,7 @@ def build_history_index(
 
 
 
-#: Built once per (frame, entity, window) and reused across folds. Keyed by
-#: content rather than by object identity, because the experiment scripts run
-#: several different feature matrices inside one process and a stale hit would
-#: silently score one cell with another cell's features.
+#: Sequence index cache, keyed by content so different feature frames never collide.
 _SEQUENCE_CACHE: dict[tuple, dict] = {}
 
 
@@ -170,11 +147,7 @@ class SequenceScorer(BaseScorer):
         self.sequence_columns = select_sequence_columns(full)
         codes = ctx.entity_keys[self.entity]
 
-        # The history index and the scaled value matrix depend only on the
-        # frame, the entity and the window - not on which fold is being fitted.
-        # A run fits this tier seven times (five out-of-fold folds, the final
-        # fit and the refit), and rebuilding an identical 590,540 x window
-        # index each time costs minutes per fit for no benefit.
+        # Reuse the history index across folds; it depends only on frame, entity and window.
         key = _cache_key(full, self.sequence_columns, codes, self.window)
         cached = _SEQUENCE_CACHE.get(key)
         if cached is not None:
@@ -297,12 +270,7 @@ class SequenceScorer(BaseScorer):
 
     @classmethod
     def load(cls, path):
-        """Rebuild the network from its state dict.
-
-        The sequence cache is *not* stored - it is a view over the whole
-        feature frame and would double the artifact size. Call
-        ``restore_context`` with the frame before scoring.
-        """
+        """Rebuild the network from its state dict."""
         import joblib
 
         payload = joblib.load(path)

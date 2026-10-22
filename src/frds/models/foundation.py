@@ -1,26 +1,4 @@
-"""Foundation tier: TabPFN v2 as a zero-training tabular baseline.
-
-Report Table 4.2. TabPFN v2 (Hollmann et al., Nature 2025) performs in-context
-inference over a learned prior: there is no gradient training on this dataset
-at all, the training rows are simply supplied as context at prediction time.
-Including it answers the obvious question a 2026 examiner will ask - whether a
-2025-generation tabular foundation model makes the boosting tier redundant.
-
-Two practical constraints shape this wrapper, and both come from the paper
-rather than from us:
-
-  * context size. TabPFN's published operating range is thousands of rows, not
-    hundreds of thousands. The context is therefore subsampled - every positive
-    that fits, plus a random draw of negatives - and the resulting shift in the
-    class prior is corrected on the output with a prior-odds adjustment, so the
-    score remains comparable to the other tiers.
-  * feature count. It expects on the order of a hundred features. The columns
-    are ranked by mutual information on the training span and the top slice is
-    kept.
-
-The dependency is optional; ``pip install tabpfn`` enables it and the tier is
-skipped with a clear message otherwise.
-"""
+"""Foundation tier: TabPFN v2 as a zero-training tabular baseline."""
 
 from __future__ import annotations
 
@@ -126,13 +104,7 @@ class TabPFNScorer(BaseScorer):
         return self._correct_prior(out)
 
     def _correct_prior(self, p: np.ndarray) -> np.ndarray:
-        """Undo the class-balance shift introduced by context subsampling.
-
-        The context over-represents fraud, so raw scores are inflated. Scaling
-        the odds by the ratio of true prior odds to context prior odds restores
-        a probability on the original scale, which is what the meta-learner and
-        the calibrator downstream expect.
-        """
+        """Undo the class-balance shift introduced by context subsampling."""
         p = np.clip(p, 1e-9, 1 - 1e-9)
         odds = p / (1 - p) * self.prior_correction_
         return odds / (1 + odds)

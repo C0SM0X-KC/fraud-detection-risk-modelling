@@ -1,16 +1,4 @@
-"""Decision layer (L4), part 2: probability calibration.
-
-Report section 4.6. A model that ranks well but is not calibrated cannot be
-used for decisioning, because a threshold on an uncalibrated score does not
-correspond to any real cost. Isotonic regression is the default: it is
-non-parametric, monotone, and it does not assume the sigmoid shape that
-Platt scaling imposes - which matters here because the fused score is already
-the output of a logistic model.
-
-The calibrator is fitted on the *validation* span, which the base models were
-not fitted on. Fitting it on train scores would calibrate against a
-distribution the deployed model never sees.
-"""
+"""Decision layer (L4), part 2: probability calibration."""
 
 from __future__ import annotations
 
@@ -75,11 +63,7 @@ class ProbabilityCalibrator:
 def reliability_curve(
     y_true: np.ndarray, p: np.ndarray, n_bins: int = 15
 ) -> dict[str, list[float]]:
-    """Empirical fraud rate per predicted-probability bin.
-
-    Quantile bins, not equal-width: with 3.5% prevalence almost every row sits
-    in the lowest equal-width bin and the curve says nothing.
-    """
+    """Empirical fraud rate per predicted-probability bin."""
     p = np.asarray(p, dtype=np.float64)
     y_true = np.asarray(y_true)
     edges = np.unique(np.quantile(p, np.linspace(0, 1, n_bins + 1)))

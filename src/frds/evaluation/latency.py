@@ -1,15 +1,4 @@
-"""Governance layer (L5): serving cost.
-
-Report objective 6 and gap G6 - inference latency is measured, not assumed.
-What is timed is the per-transaction path a live scorer would run: base model
-inference, meta-learner fusion, calibration and tier assignment. Feature
-computation is timed separately, because in production the velocity counters
-come from an online cache rather than being recomputed per request.
-
-Batch-of-one timing is deliberately included. A model that scores 100k rows in
-two seconds can still take 40 ms per single-row call, and the single-row number
-is the one that decides whether real-time interdiction is feasible.
-"""
+"""Governance layer (L5): serving cost."""
 
 from __future__ import annotations
 
@@ -98,3 +87,66 @@ def latency_report(score_fn, X: pd.DataFrame, sample_size: int = 5000) -> pd.Dat
     cols = ["mode", "p50_ms", "p95_ms", "p99_ms", "mean_ms", "max_ms"]
     extra = [c for c in frame.columns if c not in cols]
     return frame[cols + extra]
+
+
+# ------------------------------------------------------------ product path --
+def product_latency(
+    service,
+    raws: list[dict],
+    target_ms: float,
+    n_single: int = 500,
+    batch_size: int = 256,
+) -> pd.DataFrame:
+    """Time the product path on raw transactions, in arrival order."""
+    rows = []
+    stage_keys = ("features_ms", "model_ms", "decision_ms", "explanation_ms")
+
+    def run(mode: str, explain: bool, chunk: list[dict]) -> None:
+        for raw in chunk[:20]:                       # warm caches, not timed
+            service.score(raw, explain=explain, remember=False)
+        totals, stages = [], {k: [] for k in stage_keys}
+        for raw in chunk:
+            start = time.perf_counter()
+            decision = service.score(raw, explain=explain)
+            totals.append((time.perf_counter() - start) * 1000.0)
+            for k in stage_keys:
+                if k in decision["timings_ms"]:
+                    stages[k].append(decision["timings_ms"][k])
+        stats = _percentiles(np.asarray(totals))
+        stats["mode"] = mode
+        stats["samples"] = len(totals)
+        for k, values in stages.items():
+            if values:
+                stats[f"{k.removesuffix('_ms')}_p50_ms"] = round(float(np.median(values)), 3)
+        stats["target_ms"] = target_ms
+        stats["meets_target_p95"] = bool(stats["p95_ms"] <= target_ms)
+        rows.append(stats)
+        log.info("%s: p50 %.2f ms, p95 %.2f ms (target %.0f ms)",
+                 mode, stats["p50_ms"], stats["p95_ms"], target_ms)
+
+    half = max(1, min(n_single, len(raws) // 3))
+    run("single_transaction", False, raws[:half])
+    run("single_transaction_with_reasons", True, raws[half: 2 * half])
+
+    rest = raws[2 * half:]
+    samples = []
+    for k in range(0, len(rest) - batch_size + 1, batch_size):
+        chunk = rest[k: k + batch_size]
+        start = time.perf_counter()
+        service.score_many(chunk)
+        samples.append((time.perf_counter() - start) * 1000.0 / len(chunk))
+        if len(samples) >= 10:
+            break
+    if samples:
+        stats = _percentiles(np.asarray(samples))
+        stats["mode"] = f"micro_batch_{batch_size}_per_txn"
+        stats["samples"] = len(samples)
+        stats["throughput_tps"] = round(1000.0 / max(stats["mean_ms"], 1e-9), 1)
+        stats["target_ms"] = target_ms
+        stats["meets_target_p95"] = bool(stats["p95_ms"] <= target_ms)
+        rows.append(stats)
+
+    frame = pd.DataFrame(rows)
+    cols = ["mode", "p50_ms", "p95_ms", "p99_ms", "mean_ms", "max_ms", "target_ms",
+            "meets_target_p95"]
+    return frame[cols + [c for c in frame.columns if c not in cols]]

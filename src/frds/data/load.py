@@ -1,9 +1,4 @@
-"""Ingestion layer (L1): read the raw tables, merge, validate, downcast.
-
-Corresponds to stage 01 of the workflow figure and layer L1 of the
-architecture figure: schema validation, de-duplication and chronological
-ordering by TransactionDT.
-"""
+"""Ingestion layer (L1): read the raw tables, merge, validate, downcast."""
 
 from __future__ import annotations
 

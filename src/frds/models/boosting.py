@@ -1,9 +1,4 @@
-"""Tabular tier: XGBoost and LightGBM.
-
-Both handle NaN natively, so no imputation is applied - the missingness
-pattern in IEEE-CIS is itself informative and imputing it away costs signal.
-Early stopping uses the chronological validation slice, never a random one.
-"""
+"""Tabular tier: XGBoost and LightGBM."""
 
 from __future__ import annotations
 
@@ -66,14 +61,7 @@ class LightGBMScorer(BaseScorer):
 
         self.model = lgb.LGBMClassifier(
             objective="binary",
-            # Track average precision ONLY. LightGBM otherwise also tracks
-            # binary_logloss, and with scale_pos_weight near 27 the weighted
-            # logloss degrades within a handful of rounds while average
-            # precision is still climbing. Early stopping then fires on the
-            # wrong metric - in the first full run this stopped LightGBM at
-            # iteration 10 of a possible 3000 and cost it 0.16 AUC-PR, which
-            # would have been reported as "LightGBM is worse than XGBoost"
-            # when it was really "LightGBM was stopped before it had started".
+            # Track average precision only: weighted logloss degrades early and stops training too soon.
             metric="average_precision",
             scale_pos_weight=ctx.class_weight,
             random_state=ctx.seed,
@@ -116,3 +104,82 @@ class LightGBMScorer(BaseScorer):
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         return self.model.predict_proba(self._align(X))[:, 1]
+
+
+class CatBoostScorer(BaseScorer):
+    """Tabular tier, third member: CatBoost."""
+
+    name = "catboost"
+    handles_missing = True
+    supports_categorical = True
+
+    def fit(self, X_train, y_train, ctx: FitContext, X_valid=None, y_valid=None):
+        from catboost import CatBoostClassifier, Pool
+
+        self._remember_columns(X_train)
+        params = dict(self.params)
+        early = params.pop("early_stopping_rounds", 100)
+        iterations = params.pop("n_estimators", params.pop("iterations", 3000))
+        has_eval = X_valid is not None and y_valid is not None
+        categorical = [c for c in ctx.categorical if c in X_train.columns]
+        self.categorical_ = categorical
+
+        # Device stays out of self.params so GPU and CPU runs share checkpoints.
+        import os
+
+        device = os.environ.get("FRDS_CATBOOST_TASK_TYPE", "CPU").upper()
+        self.model = CatBoostClassifier(
+            iterations=iterations,
+            task_type=device,
+            loss_function="Logloss",
+            eval_metric="PRAUC",
+            scale_pos_weight=ctx.class_weight,
+            random_seed=ctx.seed,
+            thread_count=-1,
+            allow_writing_files=False,
+            verbose=False,
+            **params,
+        )
+        log.info("fitting %s on %s (%d categorical)", self.name, X_train.shape, len(categorical))
+        train_pool = Pool(self._prepare(X_train), y_train, cat_features=categorical,
+                          weight=ctx.sample_weight)
+        eval_pool = (Pool(self._prepare(X_valid), y_valid, cat_features=categorical)
+                     if has_eval else None)
+        self.model.fit(train_pool, eval_set=eval_pool,
+                       early_stopping_rounds=early if has_eval else None,
+                       use_best_model=has_eval)
+        if has_eval:
+            log.info("%s stopped at iteration %d", self.name, self.model.get_best_iteration())
+        return self
+
+    @property
+    def best_iteration_(self):
+        return self.model.get_best_iteration() if self.model is not None else None
+
+    def _prepare(self, X: pd.DataFrame) -> pd.DataFrame:
+        X = self._align(X)
+        cats = [c for c in getattr(self, "categorical_", []) if c in X.columns]
+        if cats:
+            X = X.copy()
+            X[cats] = X[cats].fillna(-1).astype(np.int64)
+        return X
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        return self.model.predict_proba(self._prepare(X))[:, 1]
+
+    def save(self, directory):
+        path = super().save(directory)
+        import joblib
+
+        payload = joblib.load(path)
+        payload["categorical"] = getattr(self, "categorical_", [])
+        joblib.dump(payload, path)
+        return path
+
+    @classmethod
+    def load(cls, path):
+        import joblib
+
+        obj = super().load(path)
+        obj.categorical_ = joblib.load(path).get("categorical", [])
+        return obj

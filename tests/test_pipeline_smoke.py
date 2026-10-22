@@ -1,11 +1,4 @@
-"""End-to-end smoke test on a small synthetic fixture.
-
-Runs every stage of the workflow into a temporary directory: ingestion,
-feature engineering, the model layer, fusion and calibration, and the
-evaluation and governance outputs. Deliberately small and deliberately slow-ish
-- it is the test that catches a stage contract breaking, which unit tests on
-individual functions cannot.
-"""
+"""End-to-end smoke test on a small synthetic fixture."""
 
 from __future__ import annotations
 
@@ -37,9 +30,7 @@ def small_run(tmp_path_factory):
     cfg.override("evaluation.psi_windows", 3)
     cfg.override("evaluation.latency_sample_size", 200)
 
-    # Large enough that the boosting model actually fits something: at 6,000
-    # rows it early-stops at iteration 1 and the assertions below become
-    # vacuous rather than protective.
+    # Big enough that boosting fits something (at 6,000 rows it stops at iteration 1).
     write_fixture(cfg.path("raw"), n_rows=40_000, n_cards=3_000,
                   n_devices=1_200, seed=1)
 
@@ -101,9 +92,7 @@ def test_risk_tiers_are_ordered_by_precision(small_run):
     for source in ("config", "derived"):
         rows = {r["tier"]: r for r in summary["tier_breakdown"][source]}
         assert sum(r["transactions"] for r in rows.values()) > 0
-        # A tier can legitimately be empty - the report's fixed 70-100 band
-        # holds almost nothing once the score is properly calibrated, which is
-        # exactly why the derived policy exists. Compare only populated tiers.
+        # Tiers can legitimately be empty; compare only populated ones.
         populated = [
             r for tier in ("low", "medium", "high")
             if (r := rows[tier])["transactions"] > 0

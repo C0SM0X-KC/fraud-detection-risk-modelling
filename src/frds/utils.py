@@ -62,13 +62,7 @@ def timed(label: str, logger: logging.Logger | None = None) -> Iterator[dict[str
 
 
 def _sanitise(value: Any) -> Any:
-    """Replace NaN and infinity with null, recursively.
-
-    Python's json module happily writes bare ``NaN``, which every other JSON
-    parser rejects. These files are meant to be read by report builders and
-    notebooks, not only by Python, so a non-finite number becomes null - and a
-    missing value reads as missing rather than as a parse error.
-    """
+    """Replace NaN and infinity with null, recursively."""
     if isinstance(value, float) and not math.isfinite(value):
         return None
     if isinstance(value, np.floating):

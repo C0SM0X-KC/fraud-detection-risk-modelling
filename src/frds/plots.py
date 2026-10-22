@@ -1,9 +1,4 @@
-"""Figures for the report.
-
-Matplotlib only, no seaborn, no style sheets that assume a theme. Figures are
-written at 150 dpi to ``reports/figures`` and are sized to sit in a Word
-document at column width without rescaling.
-"""
+"""Figures for the report."""
 
 from __future__ import annotations
 
@@ -142,4 +137,59 @@ def shap_importance(frame: pd.DataFrame, path: Path) -> Path:
     ax.set_title("Global feature attribution over high-risk alerts")
     ax.tick_params(axis="y", labelsize=8)
     ax.grid(alpha=0.25, axis="x")
+    return _save(fig, path)
+
+
+def shap_groups(frame: pd.DataFrame, path: Path) -> Path:
+    """Attribution by evidence family: which kinds of signal decide alerts."""
+    fig, ax = plt.subplots(figsize=(7.0, 4.6))
+    ordered = frame.sort_values("mean_abs_shap")
+    ax.barh(ordered["group"], ordered["mean_abs_shap"])
+    for y, (value, share) in enumerate(zip(ordered["mean_abs_shap"], ordered["share"])):
+        ax.text(value, y, f"  {share:.0%}", va="center", fontsize=8)
+    ax.set_xlabel("Mean |SHAP value| summed within the family")
+    ax.set_title("Attribution by evidence family over high-risk alerts")
+    ax.tick_params(axis="y", labelsize=8)
+    ax.grid(alpha=0.25, axis="x")
+    return _save(fig, path)
+
+
+def shap_beeswarm(values: np.ndarray, X: pd.DataFrame, path: Path, max_display: int = 15) -> Path:
+    """Per-alert attributions coloured by feature value (direction, not just size)."""
+    import shap
+
+    shap.summary_plot(values, X, max_display=max_display, show=False, plot_size=(7.0, 5.6))
+    fig = plt.gcf()
+    fig.axes[0].set_title("SHAP values over high-risk alerts")
+    return _save(fig, path)
+
+
+def faithfulness(frame: pd.DataFrame, path: Path) -> Path:
+    """Score drop when an alert's top reasons are removed vs random features."""
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    k = frame["k"].astype(str)
+    width = 0.38
+    x = np.arange(len(frame))
+    ax.bar(x - width / 2, frame["mean_score_drop_top"], width, label="top-k SHAP features removed")
+    ax.bar(x + width / 2, frame["mean_score_drop_random"], width, label="k random features removed")
+    ax.set_xticks(x, [f"k = {v}" for v in k])
+    ax.set_ylabel("Mean fall in risk score (0-100)")
+    ax.set_title("Explanation faithfulness: deletion test on high-risk alerts")
+    ax.legend(frameon=False)
+    ax.grid(alpha=0.25, axis="y")
+    return _save(fig, path)
+
+
+def robustness(frame: pd.DataFrame, path: Path) -> Path:
+    """Evasion rate against attack budget: targeted PGD vs random noise."""
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    for attack, style in (("pgd", "-o"), ("random", "--s")):
+        part = frame[frame["attack"] == attack]
+        label = "PGD (transfer from surrogate)" if attack == "pgd" else "random noise, same budget"
+        ax.plot(part["epsilon_std"], 100 * part["evasion_rate"], style, label=label)
+    ax.set_xlabel("Perturbation budget (standard deviations per mutable feature)")
+    ax.set_ylabel("Caught frauds that now clear (%)")
+    ax.set_title("Evasion of the deployed model under attacker-controlled features")
+    ax.legend(frameon=False)
+    ax.grid(alpha=0.25)
     return _save(fig, path)

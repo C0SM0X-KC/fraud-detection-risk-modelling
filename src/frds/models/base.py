@@ -1,10 +1,4 @@
-"""Common contract for every scorer in the model layer (L3).
-
-The point of a single interface is the comparison itself: objective 3 of the
-report requires five model families to be benchmarked under one identical
-protocol, which only means anything if they all see the same matrix, the same
-folds and the same imbalance handling.
-"""
+"""Common contract for every scorer in the model layer (L3)."""
 
 from __future__ import annotations
 
@@ -24,14 +18,7 @@ log = get_logger("frds.models")
 
 @dataclass
 class FitContext:
-    """Everything a model needs beyond X and y.
-
-    The tabular tiers use only the first four fields. The sequence and graph
-    tiers additionally need the *whole* time-ordered frame, because a row's
-    history and its neighbours live outside the slice being fitted; they locate
-    their rows through ``X.index``, which the pipeline keeps as the positional
-    index into ``full_X``.
-    """
+    """Everything a model needs beyond X and y."""
 
     categorical: list[str] = field(default_factory=list)
     seed: int = 42
@@ -84,10 +71,7 @@ class BaseScorer(abc.ABC):
     def load(cls, path: Path) -> "BaseScorer":
         payload = joblib.load(path)
         if "model" not in payload:
-            # The torch tiers persist a state_dict plus their own cached
-            # context, and rebuilding that needs the feature frame. They are
-            # re-fitted rather than reloaded; SHAP and the latency harness skip
-            # them and say so instead of failing here.
+            # Torch tiers are refitted, not reloaded (their context needs the feature frame).
             raise NotImplementedError(
                 f"{cls.name} is not reloadable from disk in this build "
                 f"({path.name} holds a state_dict, not a fitted estimator)."

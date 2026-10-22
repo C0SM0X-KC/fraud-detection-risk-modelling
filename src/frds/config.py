@@ -1,8 +1,4 @@
-"""Configuration loading.
-
-The YAML file in ``config/`` is the single source of truth; nothing in the
-codebase hard-codes a threshold, a window or a hyper-parameter.
-"""
+"""Configuration loading."""
 
 from __future__ import annotations
 
@@ -55,6 +51,11 @@ class Config:
     def ensure_dirs(self) -> None:
         for kind in self._data.get("paths", {}):
             self.path(kind).mkdir(parents=True, exist_ok=True)
+        # Stages write into these with pandas and matplotlib, which do not
+        # create parent directories; a fresh clone has none of them.
+        if "reports" in self._data.get("paths", {}):
+            for sub in ("tables", "figures", "metrics"):
+                (self.path("reports") / sub).mkdir(parents=True, exist_ok=True)
 
     # -- overrides ------------------------------------------------------
     def override(self, dotted: str, value: Any) -> None:

@@ -1,13 +1,4 @@
-"""Stage orchestration: the five workflow stages of the report, as functions.
-
-    prepare   stage 01, ingestion            -> data/interim/merged.parquet
-    features  stage 02, feature engineering  -> data/processed/features.parquet
-    train     stage 03, model layer          -> artifacts/base_scores.npz
-    fuse      stage 04, fusion + risk        -> artifacts/meta.joblib, calibrator
-    evaluate  stage 05, decision + governance-> reports/
-
-Each stage reads what the previous one wrote, so any stage can be re-run alone.
-"""
+"""Stage orchestration: the five workflow stages of the report, as functions."""
 
 from __future__ import annotations
 
@@ -21,6 +12,7 @@ from .config import Config
 from .data import load as data_load
 from .data.split import chronological_split, load_split, save_split
 from .evaluation import drift, explain, latency, metrics
+from .features import online
 from .features.build import build_features, load_features, save_features
 from .fusion.calibration import (
     ProbabilityCalibrator,
@@ -34,7 +26,7 @@ from .fusion.risk import (
     risk_score,
     tier_breakdown,
 )
-from .fusion.stacking import StackingMetaLearner
+from .fusion.stacking import MeanLogitBlend, StackingMetaLearner, load_combiner
 from .models.train import load_scores, save_scores, score_matrix, train_base_models
 from .utils import get_logger, set_seed, timed, write_json
 
@@ -59,12 +51,14 @@ def stage_features(cfg: Config) -> Path:
         save_split(split, cfg, df)
 
         X, y, spec, keys = build_features(df, cfg, split)
-        # The time column travels with the features: drift, latency and the
-        # capacity threshold all need it, and re-reading the merged frame just
-        # to recover one column is wasteful.
+        # Keep the time column with the features for drift, latency and capacity checks.
         keys["__time"] = df[cfg.require("data.time_col")].to_numpy(np.int64)
         keys["__amount"] = df[cfg.require("data.amount_col")].to_numpy(np.float64)
-        return save_features(X, y, spec, keys, cfg)
+        path = save_features(X, y, spec, keys, cfg)
+        # The online scorer's entity history and fitted encoders, so a new
+        # transaction can be featurised exactly as these rows were.
+        online.save_state(df, X, y, spec, cfg)
+        return path
 
 
 # ------------------------------------------------------------ stage 03 ----
@@ -83,21 +77,7 @@ def stage_train(cfg: Config, force_refit: bool = False) -> Path:
 
 # ------------------------------------------------------------ stage 04 ----
 def stage_fuse(cfg: Config) -> dict:
-    """Fuse the base scores, then calibrate whichever score validation prefers.
-
-    Stacking is fitted as specified: a meta-learner over out-of-fold base
-    scores. But it is not adopted unconditionally. The meta-learner is trained
-    on scores produced by *fold* models, while at serving time it receives
-    scores from the final models - and when ``split.refit_on_valid`` is on,
-    those final models were additionally refitted on the validation span. The
-    wider that gap, the less the learned weights transfer, and on this benchmark
-    the stack can end up below its own strongest member.
-
-    So the decision layer scores every candidate on the validation span and
-    carries the winner forward. The test span plays no part in the choice. When
-    the stack wins it is used; when a single model wins, that is reported
-    plainly rather than dressed up as an ensemble.
-    """
+    """Fuse the base scores, then calibrate whichever score validation prefers."""
     set_seed(int(cfg.require("project.seed")))
     with timed("fuse", log):
         scores = load_scores(cfg)
@@ -116,6 +96,24 @@ def stage_fuse(cfg: Config) -> dict:
         }
         for i, name in enumerate(names):
             candidates[name] = (Z_valid[:, i], Z_test[:, i])
+
+        # Equal-weight blends of the top tabular models, ranked on validation only.
+        single_rank = {
+            name: float(average_precision_score(y_valid, Z_valid[:, i]))
+            for i, name in enumerate(names)
+            if name not in {"lstm", "tcn", "hetero_gnn"}
+        }
+        ordered = sorted(single_rank, key=single_rank.get, reverse=True)
+        blends: dict[str, MeanLogitBlend] = {}
+        for size in (2, 3):
+            if len(ordered) >= size:
+                members = ordered[:size]
+                blend = MeanLogitBlend(members)
+                cols = [names.index(m) for m in members]
+                key = f"blend_top{size}"
+                blends[key] = blend
+                candidates[key] = (blend.predict_proba(Z_valid[:, cols]),
+                                   blend.predict_proba(Z_test[:, cols]))
 
         ranking = {
             name: float(average_precision_score(y_valid, valid_scores))
@@ -138,18 +136,11 @@ def stage_fuse(cfg: Config) -> dict:
 
         p_valid_raw, p_test_raw = candidates[selected]
 
-        # Isotonic regression is non-parametric and needs enough positives to
-        # estimate a step function; below that it fits noise and can leave the
-        # score worse calibrated than it found it. Platt scaling assumes a
-        # sigmoid, which is a strong assumption but a far more stable one in
-        # small samples. The method actually used is recorded in the summary.
+        # Isotonic needs enough positives; fall back to Platt scaling below that.
         method = str(cfg.require("fusion.calibration"))
         positives = int(np.sum(y_valid))
 
-        # Below a floor there is no way to estimate a calibration curve at all,
-        # and a confidently wrong one is worse than none: it collapses the score
-        # range and empties the risk tiers. Leaving the score uncalibrated with
-        # a warning is the honest failure mode.
+        # Too few positives to calibrate at all: leave the score uncalibrated and warn.
         minimum = int(cfg.get("fusion.min_calibration_positives", 50))
         if positives < minimum:
             log.warning(
@@ -174,6 +165,8 @@ def stage_fuse(cfg: Config) -> dict:
 
         artifacts = cfg.path("artifacts")
         meta.save(artifacts / "meta_learner.joblib")
+        if selected in blends:
+            blends[selected].save(artifacts / "blend.joblib")
         calibrator.save(artifacts / "calibrator.joblib")
         np.savez_compressed(
             artifacts / "fused_scores.npz",
@@ -188,6 +181,7 @@ def stage_fuse(cfg: Config) -> dict:
             "selected_on": "validation AUC-PR",
             "validation_ranking": ranking,
             "stacking_won": selected == "stacked",
+            "blend_members": blends[selected].model_names if selected in blends else None,
             "meta_learner_weights": meta.weights(),
             "calibration_method": calibrator.method,
             "calibration_positives": positives,
@@ -199,6 +193,10 @@ def stage_fuse(cfg: Config) -> dict:
             "decision layer uses '%s'; expected calibration error on test: %.6f -> %.6f",
             selected, summary["ece_before"], summary["ece_after"],
         )
+        from .tracking import log_stage
+
+        log_stage(cfg, "fuse", {f"valid_auc_pr_{k}": v for k, v in ranking.items()}
+                  | {"ece_after": summary["ece_after"]})
         return summary
 
 
@@ -227,8 +225,8 @@ def stage_evaluate(cfg: Config, skip_shap: bool = False, skip_latency: bool = Fa
         )
         selected = fusion_summary.get("selected_score", "stacked")
         score_map = {n: scores[f"test__{n}"] for n in names}
-        if selected == "stacked":
-            score_map["stacked"] = fused["p_test_raw"]
+        if selected not in names:            # the stack or a blend
+            score_map[selected] = fused["p_test_raw"]
         score_map[f"decision layer ({selected}, calibrated)"] = fused["p_test_calibrated"]
 
         results = [
@@ -316,8 +314,16 @@ def stage_evaluate(cfg: Config, skip_shap: bool = False, skip_latency: bool = Fa
             summary["latency"] = _latency_stage(
                 cfg, X, test_pos, names, tables_dir, entity_keys
             )
+            summary["latency_product"] = _product_latency_stage(cfg, test_pos, tables_dir)
 
         write_json(summary, cfg.path("reports") / "metrics" / "evaluation_summary.json")
+        from .tracking import log_stage
+
+        decision_row = next((r for r in results if r["label"].startswith("decision layer")), {})
+        log_stage(cfg, "evaluate",
+                  {f"test_{k}": decision_row.get(k) for k in
+                   ("auc_pr", "auc_roc", "f1_best", "mcc", "brier")} | {"test_ece": ece},
+                  [tables_dir / "model_comparison.csv"])
         return summary
 
 
@@ -327,33 +333,48 @@ def _explain_stage(cfg, X, test_pos, risk, policy, tables_dir, figures_dir) -> d
 
     model_dir = cfg.path("artifacts") / "models"
 
-    # Explain the model that actually makes the decisions. The fusion stage may
-    # select a single base model over the stack, and a reason code describing
-    # any other model would be explaining a decision nobody made. Only when the
-    # stack itself is selected - which has no single tree to attribute through -
-    # do we fall back to the strongest available tree model, and say so.
+    # Explain the selected score; a learned stack falls back to its strongest tree model.
     from .utils import read_json
 
     fusion_path = cfg.path("reports") / "metrics" / "fusion_summary.json"
     selected = read_json(fusion_path).get("selected_score") if fusion_path.exists() else None
-    tree_models = ("xgboost", "lightgbm", "random_forest")
+    tree_models = ("xgboost", "lightgbm", "catboost", "random_forest")
 
-    if selected in tree_models and (model_dir / f"{selected}.joblib").exists():
+    def load(n):
+        return type(build(n, cfg)).load(model_dir / f"{n}.joblib")
+
+    combiner = load_combiner(cfg.path("artifacts"), selected) if selected else None
+    if (isinstance(combiner, MeanLogitBlend)
+            and all(m in tree_models for m in combiner.model_names)):
+        # A logit blend is explained exactly: its SHAP values are the mean of
+        # its members' (see fusion.stacking.MeanLogitBlend).
+        members = [load(m) for m in combiner.model_names]
         name, faithful = selected, True
+
+        def shap_values(frame):
+            return np.mean([explain.tree_shap_values(m.model, frame) for m in members], axis=0)
+
+        def predict(frame):
+            return combiner.predict_proba(np.column_stack([m.predict_proba(frame) for m in members]))
     else:
-        available = [n for n in tree_models if (model_dir / f"{n}.joblib").exists()]
-        if not available:
-            log.warning("no tree model saved; skipping SHAP")
-            return {"skipped": "no tree model available"}
-        name, faithful = available[0], False
-        log.warning(
-            "decision layer uses '%s', which has no single tree to attribute "
-            "through; reason codes are taken from %s as a proxy", selected, name,
-        )
+        if selected in tree_models and (model_dir / f"{selected}.joblib").exists():
+            name, faithful = selected, True
+        else:
+            available = [n for n in tree_models if (model_dir / f"{n}.joblib").exists()]
+            if not available:
+                log.warning("no tree model saved; skipping SHAP")
+                return {"skipped": "no tree model available"}
+            name, faithful = available[0], False
+            log.warning(
+                "decision layer uses '%s', which has no single tree to attribute "
+                "through; reason codes are taken from %s as a proxy", selected, name,
+            )
+        single = load(name)
 
-    scorer_cls = type(build(name, cfg))
-    scorer = scorer_cls.load(model_dir / f"{name}.joblib")
+        def shap_values(frame):
+            return explain.tree_shap_values(single.model, frame)
 
+        predict = single.predict_proba
 
     alerts = np.flatnonzero(risk >= policy.high_lo)
     if alerts.size == 0:
@@ -361,20 +382,62 @@ def _explain_stage(cfg, X, test_pos, risk, policy, tables_dir, figures_dir) -> d
         alerts = np.argsort(risk)[::-1][:200]
 
     X_test = X.iloc[test_pos].reset_index(drop=True)
-    local, glob = explain.explain_alerts(
-        scorer.model,
-        X_test,
-        alerts,
-        background_size=int(cfg.require("evaluation.shap_background_size")),
-        top_k=5,
-        max_alerts=500,
-    )
+    max_alerts = int(cfg.get("evaluation.shap_max_alerts", 500))
+    selected_alerts = alerts[:max_alerts]
+    subset = X_test.iloc[selected_alerts].reset_index(drop=True)
+    log.info("computing SHAP attributions for %d alerts", len(subset))
+    values = shap_values(subset)
+    local = explain.reason_codes(values, subset, np.arange(len(subset)), top_k=5)
+    local["source_row"] = selected_alerts
+    glob = explain.global_importance(values, list(subset.columns))
     if local.empty:
         return {"skipped": "no alerts"}
+
+    # Plain-language versions of the same reason codes, for the report and
+    # for anyone reading the CSV without the feature dictionary.
+    from .evaluation.reasons import explain_row, group_attribution
+    from .features.online import load_state
+
+    try:
+        fitted = load_state(cfg)["fitted"]
+        categories = {c: v["categories"] for c, v in fitted.get("categoricals", {}).items()}
+    except (FileNotFoundError, RuntimeError):
+        categories = None
+    local["reason_text"] = [
+        " | ".join(r["text"] for r in
+                   explain_row(values[i], subset.iloc[i], None, categories, 3)["risk_factors"])
+        for i in range(len(subset))
+    ]
 
     local.to_csv(tables_dir / "alert_reason_codes.csv", index=False)
     glob.to_csv(tables_dir / "shap_global_importance.csv", index=False)
     plots.shap_importance(glob, figures_dir / "shap_importance.png")
+
+    groups = group_attribution(values, list(subset.columns))
+    groups.to_csv(tables_dir / "shap_group_importance.csv", index=False)
+    plots.shap_groups(groups, figures_dir / "shap_groups.png")
+    try:
+        plots.shap_beeswarm(values, subset, figures_dir / "shap_beeswarm.png",
+                            int(cfg.require("evaluation.shap_max_display")))
+    except Exception as exc:  # plotting must never take the stage down
+        log.warning("beeswarm plot skipped: %s", exc)
+
+    # Deletion test. Reference values are medians over ordinary (non-alert)
+    # test traffic, so "removing" a feature means making it unremarkable.
+    calibrator = ProbabilityCalibrator.load(cfg.path("artifacts") / "calibrator.joblib")
+    ordinary = np.setdiff1d(np.arange(len(X_test)), alerts)
+    sample = np.random.default_rng(0).choice(ordinary, min(5_000, len(ordinary)), replace=False)
+    reference = X_test.iloc[sample].median(numeric_only=True)
+    n_faith = min(len(subset), int(cfg.get("evaluation.faithfulness_alerts", 300)))
+    faith = explain.faithfulness(
+        predict,
+        lambda p: risk_score(calibrator.transform(p), cfg),
+        subset.iloc[:n_faith], values[:n_faith], reference,
+    )
+    faith.to_csv(tables_dir / "explanation_faithfulness.csv", index=False)
+    plots.faithfulness(faith, figures_dir / "explanation_faithfulness.png")
+    log.info("explanation faithfulness\n%s", faith.to_string(index=False))
+
     log.info("reason codes written for %d alerts (model: %s)", len(local), name)
     return {
         "model": name,
@@ -383,19 +446,14 @@ def _explain_stage(cfg, X, test_pos, risk, policy, tables_dir, figures_dir) -> d
         "output_space": "log-odds before calibration",
         "alerts_explained": int(len(local)),
         "top_features": glob.head(10).to_dict(orient="records"),
+        "evidence_groups": groups.to_dict(orient="records"),
+        "faithfulness": faith.to_dict(orient="records"),
         "sample_reason_codes": local.head(5).to_dict(orient="records"),
     }
 
 
 def _latency_stage(cfg, X, test_pos, names, tables_dir, entity_keys) -> dict:
-    """Time the full serving path: base models -> fusion -> calibration.
-
-    Every enabled tier is reloaded from disk and reconnected to the feature
-    frame, so the number reported is the cost of the whole deployed scorer,
-    not of the cheap half of it. The graph tier is warmed up to the start of
-    the test span first and then scored online - a live system maintains its
-    entity memories as traffic passes, it does not replay history per request.
-    """
+    """Time the full serving path: base models -> fusion -> calibration."""
     from .models.graph import HeteroGNNScorer
     from .models.registry import build
     from .models.sequence import SequenceScorer
@@ -457,6 +515,33 @@ def _latency_stage(cfg, X, test_pos, names, tables_dir, entity_keys) -> dict:
         "models_excluded": skipped,
         "measurements": frame.to_dict(orient="records"),
     }
+
+
+def _product_latency_stage(cfg, test_pos, tables_dir) -> dict:
+    """Time the deployed product path on raw test-span transactions."""
+    from .product import DecisionService
+
+    try:
+        merged = data_load.load_prepared(cfg)
+        start = int(test_pos.min())
+        store = online.OnlineFeatureStore(online.load_state(cfg), cfg, upto=start)
+        service = DecisionService(cfg, store=store)
+    except (NotImplementedError, FileNotFoundError, RuntimeError) as exc:
+        log.warning("product latency skipped: %s", exc)
+        return {"skipped": str(exc)}
+
+    n_single = int(cfg.get("evaluation.latency_single_samples", 500))
+    batch = int(cfg.get("evaluation.latency_batch_size", 256))
+    count = 2 * n_single + 10 * batch
+    target = cfg.require("data.target_col")
+    raws = merged.iloc[start: start + count].drop(columns=[target]).to_dict("records")
+    del merged
+
+    target_ms = float(cfg.get("evaluation.latency_target_ms", 100))
+    frame = latency.product_latency(service, raws, target_ms, n_single, batch)
+    frame.to_csv(tables_dir / "latency_product.csv", index=False)
+    log.info("\n%s", frame.to_string(index=False))
+    return {"target_ms": target_ms, "measurements": frame.to_dict(orient="records")}
 
 
 # ------------------------------------------------------------- all -------

@@ -1,28 +1,4 @@
-"""Decision layer (L4), part 3: risk score, cost-sensitive tiers, actions.
-
-Report section 4.6 and Table 4.3. Two things happen here.
-
-1. The calibrated probability becomes a bounded integer score,
-   ``S = round(100 * p)``, which is what an analyst sees.
-
-2. Thresholds on that score are chosen by cost, not by convention. A
-   transaction is worth flagging when the expected loss from allowing it
-   exceeds the expected loss from declining it:
-
-       p * C_FN  >  (1 - p) * C_FP
-
-   with ``C_FN`` proportional to the transaction amount and ``C_FP`` a fixed
-   review-and-goodwill cost. The resulting boundary is then clipped by the
-   analyst review capacity, because a tier structure that produces more
-   high-risk alerts than can be reviewed is not operationally usable.
-
-A note that the report's fixed bands make necessary: at 3.5% prevalence a
-*calibrated* probability rarely exceeds 0.7, so the literal 70-100 band in
-Table 4.3 will hold very few transactions. Both are reported - the fixed
-bands as specified, and the cost-and-capacity-derived bands that a real
-operation would run - so the gap between the two is visible rather than
-quietly papered over.
-"""
+"""Decision layer (L4), part 3: risk score, cost-sensitive tiers, actions."""
 
 from __future__ import annotations
 
@@ -81,12 +57,7 @@ def policy_from_config(cfg: Config) -> TierPolicy:
 
 
 def cost_optimal_probability(amounts: np.ndarray, cfg: Config) -> float:
-    """The break-even probability implied by the cost model.
-
-    Solving ``p * C_FN = (1 - p) * C_FP`` gives ``p* = C_FP / (C_FP + C_FN)``.
-    C_FN varies per transaction, so the population-level threshold uses the
-    mean amount; ``per_transaction_threshold`` gives the exact per-row version.
-    """
+    """The break-even probability implied by the cost model."""
     c_fp = float(cfg.require("risk.cost_fp_fixed"))
     multiplier = float(cfg.require("risk.cost_fn_multiplier"))
     c_fn = multiplier * float(np.mean(amounts))
@@ -103,11 +74,7 @@ def per_transaction_threshold(amounts: np.ndarray, cfg: Config) -> np.ndarray:
 def capacity_score_threshold(
     scores: np.ndarray, times: np.ndarray, cfg: Config
 ) -> int:
-    """Lowest score whose alert volume fits the analyst budget.
-
-    The budget is expressed as a fraction of daily transaction volume, so it
-    scales with traffic rather than being a fixed count.
-    """
+    """Lowest score whose alert volume fits the analyst budget."""
     budget_pct = float(cfg.require("risk.daily_review_capacity_pct"))
     n_days = max(1.0, (float(times.max()) - float(times.min())) / SECONDS_PER_DAY)
     per_day = budget_pct * len(scores) / n_days
@@ -130,14 +97,7 @@ def derive_policy(
     times: np.ndarray,
     cfg: Config,
 ) -> TierPolicy:
-    """Cost-and-capacity-derived tier boundaries.
-
-    ``high_lo`` is the stricter of the cost break-even score and the capacity
-    score - the operation cannot review more than its budget even when the
-    economics say it should. ``medium_lo`` is set at a third of the break-even
-    probability, the band where a step-up challenge is cheap enough to be worth
-    issuing but a hold is not justified.
-    """
+    """Cost-and-capacity-derived tier boundaries."""
     p_star = cost_optimal_probability(amounts, cfg)
     cost_score = int(np.clip(round(100 * p_star), 1, 100))
     cap_score = capacity_score_threshold(scores, times, cfg)

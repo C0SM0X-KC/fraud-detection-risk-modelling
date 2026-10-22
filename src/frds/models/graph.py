@@ -1,36 +1,4 @@
-"""Relational tier: heterogeneous graph neural network with attention.
-
-Report Table 4.2 and gap G2. The graph has one transaction node type and five
-entity node types - card, merchant, device, address and e-mail domain - with a
-distinct relation per entity type. A transaction's score depends not only on
-its own attributes but on what its card, its device and its merchant have been
-doing.
-
-The construction is *temporal*. A static snapshot GNN, which is what most of
-the reviewed work uses, aggregates over a card's entire neighbourhood including
-transactions that had not happened yet when the row being scored arrived. That
-inflates results and cannot be deployed. Instead each entity node carries a
-memory vector that is updated as the timeline advances:
-
-    for each batch, in time order:
-        1. read the memories of the transaction's five entities   (past only)
-        2. attend over the five relations and score the transaction
-        3. write the transaction back into those five memories
-
-Because step 3 happens after step 2, a transaction never contributes to its own
-score, and no future transaction ever reaches it. This is the same discipline
-as the causal aggregation in the feature layer, applied to learned state.
-
-Memory writes are detached: back-propagating through a chain of half a million
-sequential updates is not tractable, and the standard temporal-graph treatment
-is to treat memory as an input to the current step. Because of that detachment
-the update rule itself is deliberately parameter-free - an exponential moving
-average over the messages an entity receives. A learned GRU gate placed here
-would sit inside ``no_grad`` and never receive a gradient, so it would look
-trainable in the code and stay at its initialisation forever. Everything that
-does learn - the encoder, the per-relation projections, the attention vectors
-and the head - is on the gradient path.
-"""
+"""Relational tier: heterogeneous graph neural network with attention."""
 
 from __future__ import annotations
 
@@ -65,9 +33,7 @@ def _build_network(n_features: int, hidden: int, dropout: float, n_relations: in
                 nn.Linear(n_features, hidden), nn.ReLU(), nn.Dropout(dropout),
                 nn.Linear(hidden, hidden), nn.ReLU(),
             )
-            # One projection and one attention vector per relation: this is what
-            # makes the model heterogeneous rather than one graph with typed
-            # edges collapsed together.
+            # One projection and attention vector per relation (what makes it heterogeneous).
             self.relation_proj = nn.ModuleList(
                 [nn.Linear(hidden, hidden) for _ in range(n_relations)]
             )
@@ -240,9 +206,6 @@ class HeteroGNNScorer(BaseScorer):
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """Replay the whole timeline so the memories are warm, then read off
         the scores for the requested rows.
-
-        Scoring a late slice in isolation would give every entity an empty
-        memory, which is not the state a deployed system would be in.
         """
         import torch
 
@@ -265,13 +228,7 @@ class HeteroGNNScorer(BaseScorer):
         return scores[X.index.to_numpy()]
 
     def predict_online(self, X: pd.DataFrame) -> np.ndarray:
-        """Score rows against the memory as it currently stands.
-
-        This is the deployed path: a live scorer keeps the entity memories warm
-        as traffic flows past it and never replays history per request. Call
-        ``warm_memory`` once first. ``predict_proba`` replays instead, which is
-        what offline evaluation needs but is not what serving costs.
-        """
+        """Score rows against the memory as it currently stands."""
         import torch
 
         device = get_device()

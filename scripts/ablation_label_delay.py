@@ -1,34 +1,5 @@
 """Ablation: how much of the headline result depends on knowing outcomes early?
 
-Section 4.3 of the report assumes that the outcome of an earlier transaction is
-available when a later one is scored. In production it is not - a chargeback
-takes weeks to confirm - and the per-entity prior-fraud-rate features are the
-place that assumption bites. SHAP puts ``graph_uid_prior_fraud_rate`` first by a
-factor of seven, so this is not a marginal concern.
-
-Four variants, each a full re-run of feature engineering and the model layer
-into its own output directory:
-
-    delay_0    every earlier label known immediately (the optimistic baseline)
-    delay_30   labels withheld for 30 days
-    delay_60   labels withheld for 60 days
-    none       the prior-fraud-rate features removed entirely (the floor)
-
-Everything else is held fixed - same rows, same chronological split, same
-hyper-parameters - so the difference between rows is attributable to the
-labelling assumption and nothing else.
-
-Two boosting models are run rather than all six. The question is what the
-*feature* is worth, not which model is best, and the full stack costs four
-times as long for an answer to a different question.
-
-The fold count is reduced to two, which does not affect these numbers: the test
-scores come from the final fit on the whole training span, and the out-of-fold
-folds only feed the stacking meta-learner, which this ablation does not use.
-The ``delay_0`` row reproduces the main run's XGBoost AUC-PR exactly, which is
-the check that this holds. So these values are directly comparable to the main
-model-comparison table.
-
     python scripts/ablation_label_delay.py
 """
 
@@ -79,9 +50,7 @@ def run_variant(name: str, overrides: dict) -> list[dict]:
     for key, value in overrides.items():
         cfg.override(key, value)
 
-    # `interim` is left pointing at the shared merged.parquet: ingestion does
-    # not depend on the variant, and re-reading 683 MB of CSV four times would
-    # be pure waste.
+    # Ingestion does not depend on the variant, so all variants share merged.parquet.
     log.info("=== variant %s: %s ===", name, overrides)
     started = time.perf_counter()
     cpu_started = time.process_time()
@@ -113,9 +82,7 @@ def run_variant(name: str, overrides: dict) -> list[dict]:
         )
     wall = (time.perf_counter() - started) / 60
     cpu = (time.process_time() - cpu_started) / 60
-    # Wall time far above CPU time means the machine was asleep or throttled,
-    # not that the fit was genuinely slow. Worth being able to tell the two
-    # apart before concluding that a variant is expensive.
+    # Wall time far above CPU time means sleep or throttling, not a slow fit.
     log.info(
         "variant %s finished in %.1f min wall, %.1f min CPU (ratio %.2f)",
         name, wall, cpu, cpu / max(wall, 1e-9),
@@ -153,7 +120,37 @@ def main() -> int:
 
     log.info("\n%s", frame.to_string(index=False))
     log.info("wrote %s", OUT_ROOT / "results.csv")
+    plot(frame, load_config().path("reports") / "figures" / "label_delay_ablation.png")
     return 0
+
+
+def plot(frame: pd.DataFrame, path: Path) -> None:
+    """AUC-PR against confirmation delay, with the feature-removed floor."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    order = ["delay_0", "delay_30", "delay_60"]
+    days = [0, 30, 60]
+    fig, ax = plt.subplots(figsize=(7.0, 4.4))
+    for model, style in (("xgboost", "-o"), ("lightgbm", "--s")):
+        part = frame[frame["model"] == model].set_index("variant")
+        ax.plot(days, [part.loc[v, "auc_pr"] for v in order], style, label=model)
+        if "none" in part.index:
+            ax.axhline(part.loc["none", "auc_pr"], linestyle=":", alpha=0.6,
+                       label=f"{model}, fraud-history features removed")
+    ax.set_xlabel("Days before a fraud outcome is known")
+    ax.set_ylabel("Test AUC-PR")
+    ax.set_title("Sensitivity of performance to label-confirmation delay")
+    ax.set_xticks(days)
+    ax.legend(frameon=False, fontsize=8)
+    ax.grid(alpha=0.25)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log.info("wrote %s", path.name)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,10 @@ pyarrow>=15.0
 
 # Classical / boosting models
 scikit-learn>=1.4
-xgboost>=2.0
+# On Linux the xgboost wheel depends on nvidia-nccl (300 MB of GPU
+# communication library). The CPU build has the same API and import name.
+xgboost>=2.0; sys_platform != "linux"
+xgboost-cpu>=2.0; sys_platform == "linux"
 lightgbm>=4.1
 imbalanced-learn>=0.12
 optuna>=3.5

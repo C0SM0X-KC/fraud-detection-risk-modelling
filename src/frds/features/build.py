@@ -1,36 +1,4 @@
-"""Feature layer (L2): preprocessing and feature engineering.
-
-Stage 02 of the workflow figure. Produces, from the merged raw frame:
-
-  base        calendar and amount transforms
-  entity      the synthetic account id (uid) and its components
-  velocity    per-card / per-device counts and sums over 1h, 24h, 168h windows
-  recency     seconds since the entity's previous transaction
-  rolling     expanding mean / std of amount per entity, and the z-score of the
-              current amount against that history
-  graph       degree and distinct-partner counts over the card-merchant-device
-              graph, plus causal neighbourhood fraud rates
-  mismatch    email, address and device consistency flags
-  encoded     frequency and causal target encodings of the categorical fields
-
-Every aggregate is causal (see ``frds.features.causal``); every encoding that
-needs a fitted statistic is fitted on the training span only.
-
-A second property matters as much as causality and is easier to overlook:
-*stationarity*. A feature can be perfectly causal and still be useless at
-deployment if its distribution moves simply because time has passed. A
-cumulative transaction count is the clearest case - a device with 500 prior
-transactions in month six is not the same kind of object as one with 500 in
-month one, but the column cannot say so, and a tree that split on 500 during
-training is splitting on something else entirely by the test period. The drift
-report measured exactly this: the worst-drifting columns were the cumulative
-counters and the raw day index.
-
-``features.stationarise`` addresses it by dropping the bare time index,
-re-expressing the D columns against a fixed origin, and converting cumulative
-counters into rates and shares. It is a switch rather than a default so the
-effect can be measured instead of assumed.
-"""
+"""Feature layer (L2): preprocessing and feature engineering."""
 
 from __future__ import annotations
 
@@ -50,6 +18,31 @@ log = get_logger("frds.features.build")
 SECONDS_PER_DAY = 86_400
 SECONDS_PER_HOUR = 3_600
 
+# Which entities each feature family is computed over. Shared with the online
+# scorer (features/online.py), so the two cannot disagree about the feature set.
+VELOCITY_ENTITIES = ("uid", "card", "device", "address")
+RECENCY_ENTITIES = ("uid", "card", "device")
+ROLLING_ENTITIES = ("uid", "card")
+GRAPH_EDGES = (
+    ("device", "card"),
+    ("card", "device"),
+    ("merchant", "card"),
+    ("card", "merchant"),
+    ("address", "card"),
+    ("email", "card"),
+    ("device", "uid"),
+)
+#: Extra relations profiled when ``features.account_profile`` is on.
+PROFILE_EDGES = (
+    ("uid", "device"),
+    ("uid", "merchant"),
+    ("card", "email"),
+    ("card", "address"),
+)
+DEGREE_ENTITIES = ("card", "device", "merchant", "address", "email", "uid")
+PRIOR_RATE_ENTITIES = ("card", "device", "merchant", "uid", "email")
+PRIOR_WEIGHT = 20.0
+
 
 @dataclass
 class FeatureSpec:
@@ -59,6 +52,9 @@ class FeatureSpec:
     categorical: list[str] = field(default_factory=list)
     groups: dict[str, list[str]] = field(default_factory=dict)
     dropped: dict[str, list[str]] = field(default_factory=dict)
+    #: statistics fitted on the training span (encodings, priors) that the
+    #: online scorer must reuse verbatim; saved alongside, not in the JSON
+    fitted: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -80,10 +76,7 @@ def add_base_features(df: pd.DataFrame, cfg: Config, out: dict) -> list[str]:
     amt = df[amount_col].to_numpy(dtype=np.float64)
 
     stationarise = bool(cfg.get("features.stationarise", False))
-    # The raw day index is the single worst-drifting column in the feature set
-    # (PSI above 11): it is a monotone function of time, so every test-span row
-    # falls on one side of any split learned during training. Hour and day of
-    # week are cyclical and stay.
+    # The raw day index drifts badly (monotone in time); hour and weekday are cyclical and kept.
     if not stationarise:
         out["txn_day"] = (t // SECONDS_PER_DAY).astype(np.int32)
     out["txn_hour"] = ((t // SECONDS_PER_HOUR) % 24).astype(np.int8)
@@ -101,67 +94,67 @@ def add_base_features(df: pd.DataFrame, cfg: Config, out: dict) -> list[str]:
     return (created if stationarise else ["txn_day"] + created)
 
 
+def graph_edges(cfg: Config) -> tuple[tuple[str, str], ...]:
+    """The relations profiled for distinct-partner counts."""
+    if cfg.get("features.account_profile", False):
+        return GRAPH_EDGES + PROFILE_EDGES
+    return GRAPH_EDGES
+
+
+def aggregate_value_columns(cfg: Config, available) -> list[str]:
+    """Columns averaged per entity: the base set, plus the account profile."""
+    columns = list(cfg.get("features.aggregate_value_columns", []) or [])
+    if cfg.get("features.account_profile", False):
+        columns += [c for c in cfg.get("features.profile_value_columns", []) or []
+                    if c not in columns]
+    present = set(available)
+    return [c for c in columns if c in present]
+
+
 # -------------------------------------------------------------- entity ----
 def _as_text(series: pd.Series) -> pd.Series:
-    """Column to plain strings, with missing values as an explicit level.
-
-    ``astype(str)`` is not enough: under the pandas 3 string dtype a missing
-    value survives the cast as NA rather than becoming the text "nan", and it
-    then breaks any join that follows. "Missing" is a real level here anyway -
-    a card with no billing address is a different entity from one that has one.
-    """
+    """Column to plain strings, with missing values as an explicit level."""
     return series.astype("string").fillna("__na__").astype("object")
 
 
 def _join_columns(parts: list[pd.Series]) -> pd.Series:
-    """Concatenate string columns with a separator, vectorised.
-
-    A row-wise ``.agg("|".join, axis=1)`` is a Python loop over every row; at
-    590,540 rows that alone costs more than the rest of the feature stage.
-    """
+    """Concatenate string columns with a separator, vectorised."""
     joined = parts[0]
     for part in parts[1:]:
         joined = joined + "|" + part
     return joined
 
 
-def build_entity_keys(df: pd.DataFrame, cfg: Config) -> dict[str, np.ndarray]:
-    """Dense integer codes for the entities the graph and counters use.
+def entity_key_text(df: pd.DataFrame, cfg: Config) -> dict[str, pd.Series]:
+    """The identity of every entity a transaction touches, as plain text."""
+    def column(name: str) -> pd.Series:
+        if name in df.columns:
+            return _as_text(df[name])
+        return pd.Series("__na__", index=df.index, dtype="object")
 
-    ``uid`` is the standard IEEE-CIS account proxy: a card is anchored to the
-    day it was first seen (``txn_day - D1``), which separates two different
-    accounts that happen to share a card1 value.
-    """
     components = [c for c in cfg.require("features.uid_components") if c in df.columns]
     day = (df[cfg.require("data.time_col")].to_numpy(np.int64) // SECONDS_PER_DAY)
-
-    keys: dict[str, np.ndarray] = {}
-    keys["card"] = causal.encode_groups(df["card1"]) if "card1" in df else np.zeros(len(df), np.int64)
 
     parts = [_as_text(df[c]) for c in components]
     if "D1" in df.columns:
         origin = np.round(day - df["D1"].fillna(-1).to_numpy(np.float64), 0)
         parts.append(pd.Series(origin.astype(np.int64).astype(str), index=df.index))
-    keys["uid"] = causal.encode_groups(_join_columns(parts))
 
-    keys["device"] = causal.encode_groups(
-        df["DeviceInfo"] if "DeviceInfo" in df else pd.Series(np.zeros(len(df)))
-    )
-    keys["address"] = causal.encode_groups(
-        df["addr1"] if "addr1" in df else pd.Series(np.zeros(len(df)))
-    )
-    keys["email"] = causal.encode_groups(
-        df["P_emaildomain"] if "P_emaildomain" in df else pd.Series(np.zeros(len(df)))
-    )
-    # "Merchant" is not a column in IEEE-CIS. ProductCD x billing region is the
-    # closest available stand-in, and is what the graph uses as its merchant
-    # node. Stated plainly here rather than left implicit.
-    product = df["ProductCD"] if "ProductCD" in df else pd.Series("?", index=df.index)
-    region = df["addr1"] if "addr1" in df else pd.Series(0, index=df.index)
-    keys["merchant"] = causal.encode_groups(
-        _join_columns([_as_text(product), _as_text(region)])
-    )
+    return {
+        "card": column("card1"),
+        "uid": _join_columns(parts) if parts else column("card1"),
+        "device": column("DeviceInfo"),
+        "address": column("addr1"),
+        "email": column("P_emaildomain"),
+        # IEEE-CIS has no merchant column; ProductCD x billing region stands in for it.
+        "merchant": _join_columns([column("ProductCD"), column("addr1")]),
+    }
 
+
+def build_entity_keys(df: pd.DataFrame, cfg: Config) -> dict[str, np.ndarray]:
+    """Dense integer codes for the entities the graph and counters use."""
+    keys = {name: causal.encode_groups(text)
+            for name, text in entity_key_text(df, cfg).items()}
     for name, codes in keys.items():
         log.info("entity %-9s distinct=%d", name, int(codes.max()) + 1)
     return keys
@@ -179,7 +172,7 @@ def add_velocity_features(
     stationarise = bool(cfg.get("features.stationarise", False))
 
     created: list[str] = []
-    for entity in ("uid", "card", "device", "address"):
+    for entity in VELOCITY_ENTITIES:
         codes = keys[entity]
         for hours in windows:
             secs = int(hours) * SECONDS_PER_HOUR
@@ -188,10 +181,7 @@ def add_velocity_features(
             out[cnt] = causal.count_in_window(codes, t, secs)
             out[amtsum] = causal.sum_in_window(codes, t, amt, secs)
             created += [cnt, amtsum]
-        # Total history length is a different signal from a windowed burst -
-        # but as a raw count it grows with calendar time and cannot transfer.
-        # Expressed per day of entity age it is stationary and still carries
-        # "how busy is this entity".
+        # Total history per day of entity age: stationary, unlike a raw count.
         total = f"vel_{entity}_cnt_total"
         counts = causal.cumulative_count(codes).astype(np.float32)
         if stationarise:
@@ -216,13 +206,13 @@ def add_recency_and_rolling(
     amt = df[amount_col].to_numpy(np.float64)
 
     created: list[str] = []
-    for entity in ("uid", "card", "device"):
+    for entity in RECENCY_ENTITIES:
         codes = keys[entity]
         gap = f"recency_{entity}_seconds"
         out[gap] = causal.seconds_since_previous(codes, t)
         created.append(gap)
 
-    for entity in ("uid", "card"):
+    for entity in ROLLING_ENTITIES:
         codes = keys[entity]
         mean_col = f"roll_{entity}_amt_mean"
         std_col = f"roll_{entity}_amt_std"
@@ -242,51 +232,32 @@ def add_recency_and_rolling(
 # --------------------------------------------------------------- graph ----
 def add_graph_features(
     df: pd.DataFrame, cfg: Config, keys: dict[str, np.ndarray], out: dict,
-    target: np.ndarray,
+    target: np.ndarray, global_rate: float | None = None,
 ) -> list[str]:
-    """Degree and neighbourhood statistics over the card-merchant-device graph.
-
-    This is the tabular projection of the relational signal (gap G2). The
-    heterogeneous GNN consumes the same graph directly; these columns let the
-    boosting models see a shadow of it, and give an honest read on how much of
-    the graph's value a tabular model can already capture.
-    """
+    """Degree and neighbourhood statistics over the card-merchant-device graph."""
     stationarise = bool(cfg.get("features.stationarise", False))
     times = df[cfg.require("data.time_col")].to_numpy(np.int64)
 
     created: list[str] = []
-    edges = [
-        ("device", "card"),
-        ("card", "device"),
-        ("merchant", "card"),
-        ("card", "merchant"),
-        ("address", "card"),
-        ("email", "card"),
-        ("device", "uid"),
-    ]
-    # Degree is computed once and reused: velocity's *_cnt_total and graph's
-    # *_degree were previously the same quantity under two names, which wasted
-    # four columns and made the drift table read as if two things were failing.
+    edges = graph_edges(cfg)
+    # Degree is computed once and shared by the velocity and graph features.
     degree = {
         e: causal.cumulative_count(keys[e]).astype(np.float32)
-        for e in ("card", "device", "merchant", "address", "email", "uid")
+        for e in DEGREE_ENTITIES
     }
 
     for left, right in edges:
         col = f"graph_{left}_distinct_{right}"
         distinct = causal.distinct_partners_so_far(keys[left], keys[right]).astype(np.float32)
         if stationarise:
-            # The share of an entity's interactions that were with a partner it
-            # had not seen before. A device used by eleven cards out of twelve
-            # transactions is anomalous at any point in the timeline; eleven
-            # cards out of four hundred is not.
+            # Share of interactions with a previously unseen partner.
             out[f"{col}_share"] = (distinct / np.maximum(degree[left], 1.0)).astype(np.float32)
             created.append(f"{col}_share")
         else:
             out[col] = distinct
             created.append(col)
 
-    for entity in ("card", "device", "merchant", "address", "email", "uid"):
+    for entity in DEGREE_ENTITIES:
         if stationarise:
             age_days = causal.seconds_since_first_seen(keys[entity], times) / SECONDS_PER_DAY
             col = f"graph_{entity}_degree_per_day"
@@ -296,14 +267,8 @@ def add_graph_features(
             out[col] = degree[entity]
         created.append(col)
 
-    # Causal neighbourhood fraud rate: how risky this entity's own history has
-    # been. Shrunk towards the global prior, and never sees the current label.
-    #
-    # These are the features that carry the labelling assumption of section 4.3.
-    # `features.label_delay_days` withholds outcomes that would not yet have
-    # been confirmed, and `features.disable_target_encoding` drops them
-    # entirely - together they let the ablation measure how much of the
-    # headline result depends on knowing outcomes early.
+    # Causal prior fraud rate per entity, shrunk to the global prior; never sees the current label.
+    # label_delay_days and disable_target_encoding drive the label-delay ablation.
     if cfg.get("features.disable_target_encoding", False):
         log.warning("target-encoding features disabled by config")
         return created
@@ -314,10 +279,11 @@ def add_graph_features(
         log.info("label delay: outcomes withheld for %.0f days", delay_days)
     times = df[cfg.require("data.time_col")].to_numpy(np.int64)
 
-    for entity in ("card", "device", "merchant", "uid", "email"):
+    for entity in PRIOR_RATE_ENTITIES:
         col = f"graph_{entity}_prior_fraud_rate"
         out[col] = causal.expanding_target_rate(
-            keys[entity], target, times=times, label_delay_seconds=delay_seconds
+            keys[entity], target, times=times, label_delay_seconds=delay_seconds,
+            global_rate=global_rate, prior_weight=PRIOR_WEIGHT,
         )
         created.append(col)
 
@@ -337,29 +303,14 @@ def add_graph_features(
 # --------------------------------------------------- entity aggregates ----
 def add_entity_aggregates(
     df: pd.DataFrame, cfg: Config, keys: dict[str, np.ndarray], split: SplitIndex,
-    out: dict,
+    out: dict, fitted: dict | None = None,
 ) -> list[str]:
-    """Per-entity norms, and this transaction's deviation from them.
-
-    A transaction of 400 currency units means nothing on its own. On an account
-    whose every previous transaction was near 20, it means a great deal. The
-    ratio of a value to the entity's own running mean is what carries that, and
-    it is the pattern that separates strong solutions on this benchmark from
-    average ones.
-
-    Everything here is behavioural rather than label-derived, so unlike the
-    prior-fraud-rate features it does not depend on outcomes being confirmed
-    quickly. That is the point: these are the features expected to survive a
-    label-confirmation delay.
-    """
+    """Per-entity norms, and this transaction's deviation from them."""
     if not cfg.get("features.entity_aggregates", False):
         return []
 
     entities = list(cfg.get("features.aggregate_entities", ["uid", "card", "device"]))
-    value_cols = [
-        c for c in cfg.get("features.aggregate_value_columns", [])
-        if c in df.columns
-    ]
+    value_cols = aggregate_value_columns(cfg, df.columns)
     if not value_cols:
         log.warning("entity aggregates enabled but no value columns present")
         return []
@@ -381,10 +332,7 @@ def add_entity_aggregates(
                 ).astype(np.float32)
             created += [mean_col, ratio_col]
 
-    # Alternative account definitions. The uid used elsewhere anchors a card to
-    # the day it was first seen; these two do not, so they group differently
-    # and disagree with it in useful ways. Frequency-encoded on the training
-    # span only, like every other categorical.
+    # Alternative account keys, frequency-encoded on the training span.
     min_freq = int(cfg.require("features.min_category_frequency"))
     alternates = {
         "uid_card_addr": ["card1", "addr1"],
@@ -400,6 +348,11 @@ def add_entity_aggregates(
         col = f"freq_{name}"
         out[col] = series.map(counts).fillna(0).to_numpy(np.float32)
         created.append(col)
+        if fitted is not None:
+            fitted.setdefault("alternate_ids", {})[col] = {
+                "components": present,
+                "counts": {str(k): float(v) for k, v in counts.items()},
+            }
 
     log.info("entity aggregates: %d columns over %s", len(created), entities)
     return created
@@ -454,14 +407,10 @@ CATEGORICAL_CANDIDATES = (
 
 
 def add_encoded_categoricals(
-    df: pd.DataFrame, cfg: Config, split: SplitIndex, out: dict
+    df: pd.DataFrame, cfg: Config, split: SplitIndex, out: dict,
+    fitted: dict | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Frequency-encode every categorical, and label-encode it for LightGBM.
-
-    Frequencies are counted on the training span only. A level that appears
-    for the first time in the test span therefore gets a count of zero, which
-    is both correct and informative.
-    """
+    """Frequency-encode every categorical, and label-encode it for LightGBM."""
     min_freq = int(cfg.require("features.min_category_frequency"))
     numeric_cols: list[str] = []
     categorical_cols: list[str] = []
@@ -484,19 +433,20 @@ def add_encoded_categoricals(
         out[cat_col] = codes.astype(np.int32)
         categorical_cols.append(cat_col)
 
+        if fitted is not None:
+            # Saved for the online scorer: surviving levels, their counts and the label order.
+            fitted.setdefault("categoricals", {})[col] = {
+                "counts": {str(k): float(v) for k, v in train_counts[kept].items()},
+                "categories": [str(c) for c in categories],
+            }
+
     log.info("encoded %d categorical columns", len(present))
     return numeric_cols, categorical_cols
 
 
 # ------------------------------------------------------- column pruning ----
 def select_raw_numeric(df: pd.DataFrame, cfg: Config, split: SplitIndex) -> tuple[list[str], dict]:
-    """Keep the informative slice of the raw numeric columns.
-
-    IEEE-CIS ships 339 V columns that are highly redundant. They are grouped by
-    their missingness pattern - within a group the columns were computed on the
-    same population - and inside each group all but the least-correlated
-    representatives are dropped. Decisions are made on the training span only.
-    """
+    """Keep the informative slice of the raw numeric columns."""
     drop_null = float(cfg.require("features.drop_null_threshold"))
     max_v = int(cfg.require("features.max_v_columns"))
     exclude = {
@@ -577,16 +527,22 @@ def build_features(
 
     out: dict[str, np.ndarray] = {}
     spec = FeatureSpec()
+    # Shrinkage prior for the causal fraud-rate features, from the training
+    # span only. Recorded so the online scorer shrinks towards the same value.
+    global_rate = float(target[split.train].mean())
+    spec.fitted["global_fraud_rate"] = global_rate
 
     spec.groups["base"] = add_base_features(df, cfg, out)
     keys = build_entity_keys(df, cfg)
     spec.groups["velocity"] = add_velocity_features(df, cfg, keys, out)
     spec.groups["recency_rolling"] = add_recency_and_rolling(df, cfg, keys, out)
-    spec.groups["graph"] = add_graph_features(df, cfg, keys, out, target)
-    spec.groups["entity_aggregates"] = add_entity_aggregates(df, cfg, keys, split, out)
+    spec.groups["graph"] = add_graph_features(df, cfg, keys, out, target, global_rate)
+    spec.groups["entity_aggregates"] = add_entity_aggregates(
+        df, cfg, keys, split, out, spec.fitted
+    )
     spec.groups["mismatch"] = add_mismatch_features(df, out)
 
-    freq_cols, cat_cols = add_encoded_categoricals(df, cfg, split, out)
+    freq_cols, cat_cols = add_encoded_categoricals(df, cfg, split, out, spec.fitted)
     spec.groups["encoded_frequency"] = freq_cols
     spec.groups["encoded_label"] = cat_cols
     spec.categorical = cat_cols
@@ -597,9 +553,7 @@ def build_features(
     for col in raw_numeric:
         values = df[col].to_numpy(np.float32)
         if stationarise and col.startswith("D") and col[1:].isdigit():
-            # D columns count days since some earlier event, so they grow with
-            # calendar time. Subtracting the day index converts each into the
-            # (fixed) day that event happened on, which does not drift.
+            # D columns grow with time; day - D gives the fixed event day instead.
             values = (day - values).astype(np.float32)
         out[col] = values
     spec.groups["raw_numeric"] = raw_numeric

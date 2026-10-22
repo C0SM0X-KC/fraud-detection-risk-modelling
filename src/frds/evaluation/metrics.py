@@ -1,10 +1,4 @@
-"""Evaluation metrics (report Table 4.5).
-
-Accuracy is computed but never reported as a headline: a model that predicts
-"legitimate" for every transaction scores 96.5% on IEEE-CIS while catching
-nothing. The primary metric is AUC-PR, and the operational metric is recall at
-a fixed false-positive rate - the fraud caught inside a fixed alert budget.
-"""
+"""Evaluation metrics (report Table 4.5)."""
 
 from __future__ import annotations
 
@@ -41,11 +35,7 @@ def recall_at_fpr(y_true: np.ndarray, scores: np.ndarray, target_fpr: float) -> 
 
 
 def precision_at_k(y_true: np.ndarray, scores: np.ndarray, k_fraction: float) -> dict[str, float]:
-    """Precision and recall when reviewing the top ``k_fraction`` of traffic.
-
-    This is the alert-budget view: an operation reviews a fixed slice, and what
-    matters is how much fraud is in it.
-    """
+    """Precision and recall when reviewing the top ``k_fraction`` of traffic."""
     n = len(scores)
     k = max(1, int(round(k_fraction * n)))
     top = np.argsort(scores)[::-1][:k]

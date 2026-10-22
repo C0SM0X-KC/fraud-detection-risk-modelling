@@ -1,9 +1,4 @@
-"""The causal-aggregation primitives, checked against hand-computed answers.
-
-The leakage test at the bottom is the one that matters: it changes the future
-and asserts that the past does not move. Everything else in the project rests
-on that property, and it is not the kind of thing to take on faith.
-"""
+"""The causal-aggregation primitives, checked against hand-computed answers."""
 
 from __future__ import annotations
 
@@ -18,13 +13,7 @@ HOUR = 3_600
 
 @pytest.fixture
 def toy():
-    """Three cards, interleaved in time.
-
-    row: 0    1    2    3    4    5    6
-    card A    B    A    A    C    B    A
-    t(h) 0    0.5  1    2    3    4    30
-    amt  10   20   30   40   50   60   70
-    """
+    """Three cards, interleaved in time."""
     group = np.array([0, 1, 0, 0, 2, 1, 0])
     times = (np.array([0, 0.5, 1, 2, 3, 4, 30]) * HOUR).astype(np.int64)
     amounts = np.array([10.0, 20, 30, 40, 50, 60, 70])
@@ -144,10 +133,7 @@ def test_no_future_leakage():
             before[name][:cut], after[name][:cut], equal_nan=True,
             err_msg=f"'{name}' leaked information from the future",
         )
-    # The target rate is the exception worth stating: it depends on the global
-    # prior, which does move when future labels change. Its *ordering* within
-    # the past must still be unaffected, so compare against a rerun with the
-    # original labels.
+    # The target rate depends on the global prior, so compare with a rerun on the original labels.
     np.testing.assert_allclose(
         before["rate"], causal.expanding_target_rate(group, target), equal_nan=True
     )
@@ -204,3 +190,17 @@ def test_label_delay_never_leaks_the_current_row():
         group, target, prior_weight=1.0, times=times, label_delay_seconds=1
     )
     assert rates[0] == pytest.approx(float(target.mean()))
+
+
+def test_missing_values_do_not_erase_other_entities_history():
+    # A missing value in entity 0 must not blank entity 1's mean.
+    group = np.array([0, 0, 0, 1, 1, 1])
+    values = np.array([np.nan, 4.0, 6.0, 10.0, 20.0, 30.0])
+    means = causal.expanding_mean(group, values)
+    stds = causal.expanding_std(group, values)
+    assert np.isnan(means[0]) and np.isnan(means[1])     # no observed prior value
+    assert means[2] == pytest.approx(4.0)                # NaN skipped, not propagated
+    assert np.isnan(means[3])
+    assert means[4] == pytest.approx(10.0)
+    assert means[5] == pytest.approx(15.0)
+    assert stds[5] == pytest.approx(5.0)

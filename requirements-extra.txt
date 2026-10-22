@@ -1,0 +1,21 @@
+# Optional tiers and integrations. Each is skipped with a message when absent,
+# so the core pipeline never depends on them.
+
+# Foundation tier (report Table 4.2); downloads weights from Hugging Face on
+# first use and needs HF_TOKEN in .env
+tabpfn>=2.0
+
+# Experiment tracking (report Table 4.6)
+mlflow-skinny>=2.12
+
+# Kafka transport for the streaming demonstration
+kafka-python>=2.0
+
+# Reads tokens from .env
+python-dotenv>=1.0
+
+# The Kaggle CLI (`python -m frds acquire`, scripts/kaggle_job.py) runs on the
+# host, not in the image: `pip install kaggle` there.
+
+# Tabular tier, third member (improvement #2)
+catboost>=1.2

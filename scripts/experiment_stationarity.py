@@ -1,28 +1,5 @@
 """Does re-expressing time-growing features actually help?
 
-The drift report found that the worst-drifting columns in the feature set were
-the raw day index and the cumulative per-entity counters - features that move
-simply because time has passed, regardless of any change in behaviour. A tree
-that splits on "this device has 500 prior transactions" during training is
-splitting on a different population by the test period.
-
-``features.stationarise`` re-expresses them: the day index is dropped, the D
-columns are anchored to a fixed origin, and cumulative counters become rates
-per day of entity age and shares of an entity's interactions. Whether that
-helps is a question, not an assumption, so it is measured here.
-
-Four cells, a full 2x2:
-
-    baseline_delay_0    features as they are, outcomes known immediately
-    stationary_delay_0  stationarised features, outcomes known immediately
-    baseline_delay_30   features as they are, 30-day confirmation delay
-    stationary_delay_30 stationarised features, 30-day confirmation delay
-
-The delayed pair is the one that matters. The instant-label setting is already
-argued in the report to overstate deployable performance, so an improvement
-that only shows up there is worth little; an improvement that survives the
-delay is worth having.
-
     python scripts/experiment_stationarity.py
 """
 

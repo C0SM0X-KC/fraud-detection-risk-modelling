@@ -1,20 +1,4 @@
-"""Governance layer (L5): concept-drift monitoring by Population Stability Index.
-
-Report objective 6 and gap G5. PSI compares the distribution of a quantity in
-a later window against a reference window:
-
-    PSI = sum_i (actual_i - expected_i) * ln(actual_i / expected_i)
-
-Conventional reading, which the ``interpret`` helper applies:
-
-    < 0.10   stable
-    0.10-0.25 moderate shift, watch
-    > 0.25   significant shift, retrain
-
-Bin edges come from the *reference* window and are reused for every later
-window. Recomputing quantile edges per window would make every window look
-identical by construction, which is the usual way this metric gets faked.
-"""
+"""Governance layer (L5): concept-drift monitoring by Population Stability Index."""
 
 from __future__ import annotations
 
@@ -68,11 +52,7 @@ def interpret(value: float, alert_threshold: float = 0.25) -> str:
 def score_drift(
     scores: np.ndarray, times: np.ndarray, cfg: Config
 ) -> pd.DataFrame:
-    """PSI of the model's own score distribution across temporal windows.
-
-    Score drift is the cheapest drift signal a deployed system has: it needs no
-    labels, so it fires during the weeks before confirmed fraud labels arrive.
-    """
+    """PSI of the model's own score distribution across temporal windows."""
     n_windows = int(cfg.require("evaluation.psi_windows"))
     n_bins = int(cfg.require("evaluation.psi_bins"))
     alert = float(cfg.require("evaluation.psi_alert_threshold"))
@@ -106,12 +86,7 @@ def score_drift(
 def feature_drift(
     X: pd.DataFrame, times: np.ndarray, cfg: Config, top_n: int = 25
 ) -> pd.DataFrame:
-    """PSI per feature between the first and last temporal window.
-
-    Ranked worst-first: these are the columns whose meaning has changed most
-    between the reference period and the deployment period, and therefore the
-    ones a retraining decision should be argued from.
-    """
+    """PSI per feature between the first and last temporal window."""
     n_windows = int(cfg.require("evaluation.psi_windows"))
     n_bins = int(cfg.require("evaluation.psi_bins"))
     alert = float(cfg.require("evaluation.psi_alert_threshold"))

@@ -1,15 +1,4 @@
-/**
- * Shared pieces for the Phase-3 report: data loading, formatting helpers and
- * the front matter (title page, certificate, acknowledgement, abstract, and
- * the contents / tables / figures listings).
- *
- * Every number is read from reports/ at build time rather than typed in, so
- * re-running the pipeline and re-running the build keeps the document current.
- * A missing figure or metric file degrades to a visible placeholder rather
- * than a silently wrong number.
- *
- * Entry point is scripts/build_report.js.
- */
+/** Shared helpers, data loading and front matter for the Phase-3 report. */
 
 const fs = require("fs");
 const path = require("path");
@@ -33,14 +22,35 @@ const readJson = (rel) => {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 };
 
+// RFC 4180 fields: some labels contain commas, e.g. "decision layer (xgboost, calibrated)".
+const parseCsvLine = (line) => {
+  const cells = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") { cells.push(cell); cell = ""; }
+    else cell += ch;
+  }
+  cells.push(cell);
+  return cells;
+};
+
 const readCsv = (rel) => {
   const p = path.join(ROOT, rel);
   if (!fs.existsSync(p)) { console.warn(`  missing ${rel}`); return null; }
   const lines = fs.readFileSync(p, "utf8").trim().split(/\r?\n/);
-  const head = lines[0].split(",");
+  const head = parseCsvLine(lines[0]);
   return lines.slice(1).map((line) => {
-    // No quoted commas in anything this pipeline writes.
-    const cells = line.split(",");
+    const cells = parseCsvLine(line);
+    if (cells.length !== head.length) {
+      throw new Error(`${rel}: row has ${cells.length} cells, header has ${head.length}`);
+    }
     return Object.fromEntries(head.map((h, i) => [h, cells[i]]));
   });
 };
@@ -61,6 +71,20 @@ const D = {
   ablation: readCsv("reports/ablation_label_delay/results.csv"),
   tuning: readCsv("reports/tuning/deep_tier_search.csv"),
   tuningBest: readJson("reports/tuning/best_config.json"),
+  // Added with the product, robustness, transfer and tuning work.
+  latencyProduct: readCsv("reports/tables/latency_product.csv"),
+  groups: readCsv("reports/tables/shap_group_importance.csv"),
+  faith: readCsv("reports/tables/explanation_faithfulness.csv"),
+  reasons: readCsv("reports/tables/alert_reason_codes.csv"),
+  robustness: readCsv("reports/tables/robustness.csv"),
+  robustnessMeta: readJson("reports/metrics/robustness.json"),
+  baf: readCsv("reports/tables/baf_transfer.csv"),
+  bafTiers: readCsv("reports/tables/baf_tiers.csv"),
+  bafMeta: readJson("reports/metrics/baf_transfer.json"),
+  optuna: readJson("reports/tuned_run/tuned_params.json"),
+  tunedComparison: readCsv("reports/tuned_run/model_comparison.csv"),
+  handsetComparison: readCsv("reports/baseline_handset/model_comparison.csv"),
+  handsetFusion: readJson("reports/baseline_handset/fusion_summary.json"),
 };
 
 const num = (v, dp = 4) => (v === undefined || v === null || v === "" || Number.isNaN(Number(v)))
@@ -78,6 +102,9 @@ const MODEL_LABELS = {
   tcn: "TCN (sequential)",
   hetero_gnn: "Heterogeneous GNN",
   tabpfn: "TabPFN v2",
+  catboost: "CatBoost",
+  blend_top2: "Blend of top two (logit mean)",
+  blend_top3: "Blend of top three (logit mean)",
   stacked: "Stacked ensemble",
   "stacked+calibrated": "Stacked + calibrated",
 };
@@ -307,11 +334,11 @@ const abstract = [
     "quantify how risky it is on a scale an operation can act upon."),
   P("This project implements a five-stage pipeline with a feedback loop. Behavioural, " +
     "velocity and relational features are engineered under a strict causality rule, so that " +
-    "no aggregate may be computed from a transaction later than the one being scored. Five " +
+    "no aggregate may be computed from a transaction later than the one being scored. Four " +
     "model families are benchmarked under one identical protocol: logistic regression and " +
     "random forest as baselines, XGBoost and LightGBM as the tabular tier, an LSTM over " +
-    "per-entity transaction sequences, a temporal heterogeneous graph neural network with " +
-    "attention over the card-merchant-device graph, and a tabular foundation model. A " +
+    "per-entity transaction sequences, and a temporal heterogeneous graph neural network " +
+    "with attention over the card-merchant-device graph. A " +
     "stacking meta-learner fitted on out-of-fold scores fuses the base probabilities, " +
     "isotonic regression calibrates the result, and the calibrated probability is mapped to " +
     "a 0-100 risk score with cost-sensitive operational tiers. Evaluation uses a strictly " +
@@ -320,7 +347,7 @@ const abstract = [
   P(`On the held-out final span of ${int(D.split?.test?.rows)} transactions, the strongest ` +
     `model attains an AUC-PR of ${num(best?.auc_pr)} against a no-skill floor equal to the ` +
     `prevalence of ${num(testPrev)}, a lift of ` +
-    `${num(modelByLabel.xgboost?.auc_pr_lift_over_prevalence, 1)} times. Isotonic ` +
+    `${num((modelByLabel[best?.label] || modelByLabel.xgboost)?.auc_pr_lift_over_prevalence, 1)} times. Isotonic ` +
     `calibration reduces expected calibration error from ${num(D.fusion?.ece_before)} to ` +
     `${num(D.fusion?.ece_after)}. The high-risk tier isolates ` +
     `${pct(tierRow(D.tiersConfig, "high").share_of_all_fraud)} of all fraud in ` +
@@ -328,14 +355,19 @@ const abstract = [
     `precision of ${pct(tierRow(D.tiersConfig, "high").precision_in_tier)}, reducing modelled ` +
     `loss by ${num(D.evaluation?.cost?.config?.cost_reduction_pct, 1)} per cent against ` +
     `taking no action. A controlled ablation shows that withholding fraud outcomes for 30 ` +
-    `days, as a real chargeback cycle would, removes roughly a third of this performance - ` +
-    `a sensitivity that none of the surveyed studies reports.`),
+    `days, as a real chargeback cycle would, lowers AUC-PR to ` +
+    `${num(abl("delay_30", "xgboost").auc_pr)} - a sensitivity none of the surveyed studies ` +
+    `reports. The system is delivered as a product that decides a single raw transaction ` +
+    `in ${num(((D.latencyProduct || []).find((r) => r.mode === "single_transaction") || {}).p50_ms, 0)} ` +
+    `ms at the median with plain-language reasons whose faithfulness is tested, and its ` +
+    `robustness to evasion and its transfer to the Bank Account Fraud dataset are measured.`),
   P("The work concludes that a calibrated, cost-anchored decision layer is what converts a " +
     "classifier into a usable fraud control, and that the labelling assumptions embedded in " +
     "history-based features matter more to reported performance than the choice of model " +
-    "architecture. The implementation uses Python 3.11 with scikit-learn, XGBoost, " +
-    "LightGBM, PyTorch and SHAP, and is released as a configuration-driven, tested pipeline " +
-    "that reproduces every figure and table in this report from a single command."),
+    "architecture. The implementation uses Python with scikit-learn, XGBoost, LightGBM, " +
+    "CatBoost, PyTorch, SHAP, FastAPI and Streamlit, and is released as a configuration-" +
+    "driven, tested and containerised pipeline that reproduces every figure and table in " +
+    "this report."),
   Break(),
 ];
 
@@ -362,10 +394,18 @@ const frontTables = [
     ["4.5", "Risk-tier performance under the specified score bands"],
     ["4.6", "Modelled cost of the decision policy"],
     ["4.7", "Global SHAP attribution over high-risk alerts"],
-    ["4.8", "Population Stability Index across temporal windows"],
-    ["4.9", "Inference latency of the complete scoring path"],
-    ["4.10", "Hyper-parameter search over the sequential and relational tiers"],
-    ["4.11", "Label-delay ablation"],
+    ["4.8", "Attribution by evidence family over high-risk alerts"],
+    ["4.9", "Explanation faithfulness: deletion test on high-risk alerts"],
+    ["4.10", "Population Stability Index across temporal windows"],
+    ["4.11", "Inference latency of the complete benchmark stack"],
+    ["4.12", "Hyper-parameter search over the sequential and relational tiers"],
+    ["4.13", "Label-delay ablation"],
+    ["4.14", "Optuna search for the boosting tier and its effect on the test span"],
+    ["4.15", "Effect of the account profile and CatBoost"],
+    ["4.16", "Evasion of the deployed model under attacker-controlled features"],
+    ["4.17", "The same protocol on Bank Account Fraud (test month)"],
+    ["4.18", "Fixed risk bands applied to Bank Account Fraud"],
+    ["4.19", "Latency of the product path, from raw transaction to decision"],
   ], [1, 7], { numericFrom: 9 }),
   Break(),
   H1("LIST OF FIGURES"),
@@ -378,8 +418,11 @@ const frontTables = [
     ["4.3", "Reliability of the calibrated risk score"],
     ["4.4", "Risk-score distribution and tier boundaries"],
     ["4.5", "Global SHAP attribution over high-risk alerts"],
-    ["4.6", "Score drift across the test timeline"],
-    ["4.7", "Sensitivity of performance to label-confirmation delay"],
+    ["4.6", "Attribution by evidence family over high-risk alerts"],
+    ["4.7", "Fall in risk score when the stated reasons are removed"],
+    ["4.8", "Score drift across the test timeline"],
+    ["4.9", "Sensitivity of performance to label-confirmation delay"],
+    ["4.10", "Evasion rate against perturbation budget"],
   ], [1, 7], { numericFrom: 9 }),
   Break(),
 ];

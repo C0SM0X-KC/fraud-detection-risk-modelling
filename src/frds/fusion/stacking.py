@@ -1,11 +1,4 @@
-"""Decision layer (L4), part 1: the stacking meta-learner.
-
-Report section 4.5, fusion tier. A logistic regression over the base-model
-probabilities, fitted on the out-of-fold scores from the train span. Logit
-transformation first, because the base scores are bunched near zero and a
-linear model on raw probabilities cannot separate 0.001 from 0.02 - which is
-exactly the range the decision depends on.
-"""
+"""Decision layer (L4), part 1: the stacking meta-learner."""
 
 from __future__ import annotations
 
@@ -73,3 +66,36 @@ class StackingMetaLearner:
         obj.model = payload["model"]
         obj.model_names = payload["names"]
         return obj
+
+
+class MeanLogitBlend:
+    """Average of base-model log-odds: fusion with nothing to fit."""
+
+    def __init__(self, model_names: list[str] | None = None) -> None:
+        self.model_names = list(model_names or [])
+
+    def predict_proba(self, base_scores: np.ndarray) -> np.ndarray:
+        z = to_logit(base_scores).mean(axis=1)
+        return 1.0 / (1.0 + np.exp(-z))
+
+    def weights(self) -> dict[str, float]:
+        return {n: 1.0 / len(self.model_names) for n in self.model_names}
+
+    def save(self, path: Path) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump({"kind": "mean_logit_blend", "names": self.model_names}, path)
+        return path
+
+    @classmethod
+    def load(cls, path: Path) -> "MeanLogitBlend":
+        return cls(joblib.load(path)["names"])
+
+
+def load_combiner(artifacts: Path, selected: str):
+    """The fitted fusion object behind a selected score, or None for a single model."""
+    if selected == "stacked":
+        return StackingMetaLearner.load(Path(artifacts) / "meta_learner.joblib")
+    if selected.startswith("blend"):
+        return MeanLogitBlend.load(Path(artifacts) / "blend.joblib")
+    return None

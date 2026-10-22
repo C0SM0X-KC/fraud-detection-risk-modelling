@@ -1,9 +1,4 @@
-"""Imbalance handling, applied to the training fold only.
-
-Report Table 4.1, step A.5, states this explicitly: resampling never touches
-the validation or test fold, so the reported metrics reflect the true 3.5%
-class prior rather than a rebalanced fiction.
-"""
+"""Imbalance handling, applied to the training fold only."""
 
 from __future__ import annotations
 
@@ -21,13 +16,7 @@ SECONDS_PER_DAY = 86_400
 
 
 def recency_weights(fit_times: np.ndarray | None, cfg: Config) -> np.ndarray | None:
-    """Exponentially down-weight older training rows.
-
-    Fraud is non-stationary: a pattern from day 1 is weaker evidence about the
-    deployment period than a pattern from day 120, but an unweighted fit treats
-    them identically. The half-life is the number of days over which a row's
-    influence halves; ``null`` disables the weighting entirely.
-    """
+    """Exponentially down-weight older training rows."""
     half_life = cfg.get("imbalance.recency_half_life_days")
     if not half_life or fit_times is None or len(fit_times) == 0:
         return None
@@ -64,12 +53,7 @@ def make_context(
 def apply(
     X_train: pd.DataFrame, y_train: np.ndarray, cfg: Config
 ) -> tuple[pd.DataFrame, np.ndarray]:
-    """Return a possibly resampled training fold.
-
-    ``class_weight`` and ``none`` return the fold untouched - the weighting is
-    handled inside each estimator, which is cheaper than materialising millions
-    of synthetic rows and does not distort the feature distribution.
-    """
+    """Return a possibly resampled training fold."""
     method = str(cfg.get("imbalance.method", "class_weight")).lower()
     if method in {"class_weight", "none"}:
         return X_train, y_train

@@ -1,10 +1,4 @@
-"""Chronological splitting (report objective 1, gap G1).
-
-Nothing in this project uses a random split. The timeline is cut once into
-train / valid / test, and the out-of-fold predictions the stacker consumes come
-from expanding-window folds inside the train span - never from shuffled folds,
-which would let a card's future behaviour inform its own past score.
-"""
+"""Chronological splitting (report objective 1, gap G1)."""
 
 from __future__ import annotations
 
@@ -48,11 +42,7 @@ class SplitIndex:
 
 
 def chronological_split(df: pd.DataFrame, cfg: Config) -> SplitIndex:
-    """Cut the timeline at the configured quantiles of TransactionDT.
-
-    The cut is made on the *time value*, not on row position, so every
-    transaction sharing a timestamp lands on the same side of the boundary.
-    """
+    """Cut the timeline at the configured quantiles of TransactionDT."""
     time_col = cfg.require("data.time_col")
     train_frac = float(cfg.require("split.train_frac"))
     valid_frac = float(cfg.require("split.valid_frac"))
@@ -92,13 +82,7 @@ def chronological_split(df: pd.DataFrame, cfg: Config) -> SplitIndex:
 def expanding_window_folds(
     time_values: np.ndarray, n_folds: int, min_train_frac: float = 0.35
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-    """Yield (fit_idx, score_idx) pairs over an expanding time window.
-
-    Fold k fits on everything before boundary k and scores the slice between
-    boundary k and boundary k+1. Concatenating the score slices gives one
-    out-of-fold prediction per row in the tail of the train span, which is
-    exactly what the stacking meta-learner needs.
-    """
+    """Yield (fit_idx, score_idx) pairs over an expanding time window."""
     if n_folds < 2:
         raise ValueError("n_folds must be at least 2")
     n = len(time_values)
@@ -119,11 +103,7 @@ def expanding_window_folds(
 
 
 def temporal_windows(time_values: np.ndarray, n_windows: int) -> list[np.ndarray]:
-    """Split an index range into ``n_windows`` equal-duration slices.
-
-    Used by the PSI drift monitor, which compares successive deployment
-    periods rather than successive equal-count batches.
-    """
+    """Split an index range into ``n_windows`` equal-duration slices."""
     t_min, t_max = float(time_values.min()), float(time_values.max())
     edges = np.linspace(t_min, t_max, n_windows + 1)
     windows = []

@@ -1,26 +1,4 @@
-"""Visual identity for the analyst console.
-
-The screen's ancestor is a printed ledger, so the design is built from one:
-green-bar accounting paper, marked up by a reviewer.
-
-The alternating bands are not decoration. Columnar paper was printed that way
-because the eye loses its place tracking across a wide row of figures, and a
-transaction queue has exactly that problem, so the banding is doing the job it
-was invented for. Held dark, the bands are a two-step shift rather than a
-stripe: enough to guide the eye, not enough to read as a pattern.
-
-Colour is spent only where it carries meaning, and the two accents keep separate
-jobs. Blue is the reviewer's mark in the margin - what the model judged. The
-stamp is near-white, and it is deliberately the brightest thing on the screen,
-because confirmed fraud is the one fact here that is not a prediction. Scanning
-the gutter, a mark without a stamp is a false alarm and a stamp without a mark is
-a miss, so precision and recall are legible in the margin before any figure is
-read.
-
-Figures are set in a monospaced face with tabular lining numerals, because a
-column of amounts has to align on the decimal to be scannable. They are set as
-figures, not as bars: a ledger states a number and marks the margin.
-"""
+"""Visual identity for the analyst console."""
 
 from __future__ import annotations
 
@@ -175,6 +153,34 @@ label, [data-testid="stWidgetLabel"] p {
   .fig { flex:1 1 33%; border-bottom:1px solid var(--rule); }
   [data-testid="stAppViewBlockContainer"] { padding:1.3rem 1rem 3rem; }
 }
+
+/* The verdict slip: the product's answer, set larger than anything else on the
+   check page. The rule on the left carries the tier, using the same pen blue
+   for a hold and a dimmer rule for a challenge, so the ledger's vocabulary
+   carries over. */
+.verdict { border:1px solid var(--rule); border-left:4px solid var(--rule);
+  background:var(--panel); padding:1.1rem 1.2rem; margin-bottom:1rem; }
+.verdict.high { border-left-color:var(--pen); }
+.verdict.medium { border-left-color:#8FA6C4; }
+.verdict-k { font-family:var(--mono); font-size:10px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--faint); }
+.verdict-v { font-family:var(--sans); font-size:28px; font-weight:700;
+  color:#E6ECF4; line-height:1.15; margin:.15rem 0 .35rem; }
+.verdict.high .verdict-v { color:var(--pen); }
+.verdict-line { font-family:var(--mono); font-size:12px; color:var(--ink); line-height:1.8; }
+.verdict-line b { color:#E6ECF4; font-weight:600; }
+.scale { position:relative; height:6px; background:var(--rule); margin:.7rem 0 .25rem; }
+.scale > span { position:absolute; top:-3px; width:2px; height:12px; background:var(--stamp); }
+.scale > i { position:absolute; top:0; height:100%; background:#2A3546; }
+.scale-k { display:flex; justify-content:space-between; font-family:var(--mono);
+  font-size:9px; color:var(--faint); }
+.why { margin-bottom:.7rem; }
+.why-t { font-family:var(--sans); font-size:13px; color:#DCE3EC; line-height:1.4; }
+.why-m { font-family:var(--mono); font-size:10px; color:var(--faint); margin:.1rem 0 .25rem; }
+.why-bar { height:2px; background:var(--rule); }
+.why-bar > span { display:block; height:100%; background:var(--pen); }
+.why.against .why-bar > span { background:#5F6B7C; }
+.why.against .why-t { color:var(--ink); }
 </style>
 """
 
@@ -210,11 +216,7 @@ def reason_rows(reasons: list[tuple[str, str, float]]) -> str:
 
 
 def band_rows(bands: list[tuple[str, float, float]]) -> str:
-    """Share of volume against share of fraud, per score band.
-
-    The evidence for where the tier cuts belong: a thin slice of volume holds
-    most of the fraud, and this is the picture of that.
-    """
+    """Share of volume against share of fraud, per score band."""
     rows = []
     for label, volume_share, fraud_share in bands:
         rows.append(
@@ -232,16 +234,7 @@ def band_rows(bands: list[tuple[str, float, float]]) -> str:
 
 
 def ledger_style(frame, tiers, fraud):
-    """Green-bar banding, with the margin marked as a reviewer would mark it.
-
-    ``tiers`` and ``fraud`` are aligned sequences rather than column names: the
-    display table holds formatted strings, and the values that decide how a row
-    is marked are not the values shown in it.
-
-    Alternating bands help the eye cross a wide row - the reason columnar paper
-    was printed this way. The gutter column carries the pen stroke, the outcome
-    column carries the stamp, and nothing else is coloured.
-    """
+    """Green-bar banding, with the margin marked as a reviewer would mark it."""
     held = list(tiers)
     confirmed = list(fraud)
 
@@ -267,3 +260,69 @@ def ledger_style(frame, tiers, fraud):
     if "Outcome" in frame.columns:
         styler = styler.apply(stamp, subset=["Outcome"])
     return styler
+
+
+def verdict_card(decision: dict, medium_lo: int, high_lo: int) -> str:
+    """The product's answer: verdict, score on its scale, and what to do."""
+    tier = decision["tier"]
+    score = int(decision["risk_score"])
+    timings = decision.get("timings_ms", {})
+    flag = "yes" if decision.get("is_fraud_prediction") else "no"
+    return (
+        f'<div class="verdict {tier}">'
+        f'<div class="verdict-k">Transaction {decision["transaction_id"]} &middot; '
+        f'{decision["model"]}</div>'
+        f'<div class="verdict-v">{decision["verdict"]}</div>'
+        f'<div class="verdict-line">Risk score <b>{score}</b> / 100 &nbsp;&middot;&nbsp; '
+        f'probability <b>{decision["probability"]:.2%}</b> &nbsp;&middot;&nbsp; '
+        f'action <b>{decision["action"]}</b></div>'
+        f'<div class="scale">'
+        f'<i style="left:{medium_lo}%;width:{high_lo - medium_lo}%"></i>'
+        f'<span style="left:calc({min(score, 99)}% - 1px)"></span></div>'
+        f'<div class="scale-k"><span>0 approve</span><span>{medium_lo} challenge</span>'
+        f'<span>{high_lo} hold</span><span>100</span></div>'
+        f'<div class="verdict-line" style="margin-top:.6rem">Cost-sensitive fraud flag '
+        f'<b>{flag}</b> (break-even probability {decision["break_even_probability"]:.2%} '
+        f'for this amount) &nbsp;&middot;&nbsp; decided in '
+        f'<b>{timings.get("total_ms", float("nan")):.1f} ms</b></div>'
+        f'</div>'
+    )
+
+
+def plain_reasons(factors: list[dict], against: bool = False) -> str:
+    """Reason codes as sentences, each with a rule sized by its contribution."""
+    if not factors:
+        return '<p class="note">None.</p>'
+    largest = max(abs(f["contribution"]) for f in factors) or 1.0
+    out = []
+    for f in factors:
+        width = max(2.0, 100.0 * abs(f["contribution"]) / largest)
+        sign = "+" if f["contribution"] > 0 else "−"
+        out.append(
+            f'<div class="why{" against" if against else ""}">'
+            f'<div class="why-t">{f["text"]}</div>'
+            f'<div class="why-m">{f["group"]} &middot; {f["feature"]} &middot; '
+            f'{sign}{abs(f["contribution"]):.3f} log-odds</div>'
+            f'<div class="why-bar"><span style="width:{width:.1f}%"></span></div></div>'
+        )
+    return "".join(out)
+
+
+def group_rows(groups: list[dict], limit: int = 6) -> str:
+    """Net evidence by family: which kinds of signal decided the score."""
+    shown = [g for g in groups if abs(g["contribution"]) > 1e-4][:limit]
+    if not shown:
+        return '<p class="note">No net evidence.</p>'
+    largest = max(abs(g["contribution"]) for g in shown) or 1.0
+    out = []
+    for g in shown:
+        width = max(2.0, 100.0 * abs(g["contribution"]) / largest)
+        against = g["contribution"] < 0
+        sign = "−" if against else "+"
+        out.append(
+            f'<div class="why{" against" if against else ""}">'
+            f'<div class="why-m" style="color:var(--ink)">{g["group"]} &nbsp; '
+            f'{sign}{abs(g["contribution"]):.3f}</div>'
+            f'<div class="why-bar"><span style="width:{width:.1f}%"></span></div></div>'
+        )
+    return "".join(out)

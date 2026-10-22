@@ -1,19 +1,4 @@
-"""Replay the held-out span as an arriving transaction stream.
-
-Report section 3.3 states the assumption this rests on: replaying a historical
-dataset in time order is an acceptable proxy for a live stream, because the
-per-transaction computation is identical. What a replay adds over a static
-evaluation is the thing a demonstration needs - the system is seen *deciding*,
-in order, with the alert queue and the monitors filling as traffic arrives.
-
-Two properties are deliberate. Transactions are delivered strictly in
-chronological order, because the graph tier's entity memories advance as the
-stream is consumed and would be wrong if a later batch were scored first. And
-they are delivered in batches rather than one at a time: the measured
-single-transaction cost is around 126 ms against 0.24 ms amortised in batches
-of 1024, so batching is not a demo convenience but the configuration that
-actually meets the latency requirement.
-"""
+"""Replay the held-out span as an arriving transaction stream."""
 
 from __future__ import annotations
 

@@ -1,21 +1,4 @@
-"""Schema-compatible synthetic stand-in for IEEE-CIS Fraud Detection.
-
-Why this exists: the Kaggle download needs an account and a one-time rules
-acceptance, and anyone cloning the repo should be able to watch the whole
-pipeline run. The fixture reproduces the *shape* of the benchmark - column
-names, dtypes, missingness pattern, 3.5% prevalence, a 182-day span - and
-embeds the four signal types the model layer is supposed to find:
-
-  * tabular    - fraud skews to larger amounts and to particular ProductCD /
-                 email-domain combinations;
-  * temporal   - fraud arrives in short bursts on a card, not uniformly;
-  * relational - a small pool of compromised devices is shared across many
-                 otherwise unrelated cards (an organised ring);
-  * drift      - the amount distribution and the ring mix shift over the span,
-                 so the PSI monitor has something real to measure.
-
-The numbers it produces are NOT results. It is a wiring fixture.
-"""
+"""Schema-compatible synthetic stand-in for IEEE-CIS Fraud Detection."""
 
 from __future__ import annotations
 
@@ -167,8 +150,7 @@ def generate(
     )
 
     # ---- C1..C14 counting features ------------------------------------
-    # Only a handful carry signal, and only weakly. Shifting all fourteen makes
-    # their sum a near-perfect separator, which no real benchmark offers.
+    # Only a few carry weak signal; shifting all would make the task trivially separable.
     informative_c = {1, 2, 4, 11, 13}
     for i in range(1, 15):
         base = rng.poisson(1.6, size=n).astype(float)
@@ -177,8 +159,7 @@ def generate(
         frame[f"C{i}"] = base
 
     # ---- D1..D15 timedelta features -----------------------------------
-    # D1 is days since the card was first seen; keep it consistent with `day`
-    # so the uid trick (day - D1 = account origin) actually works.
+    # D1 = days since the card was first seen, consistent with `day` so day - D1 works as a uid.
     card_origin = pd.Series(day).groupby(pd.Series(card1)).transform("min").to_numpy()
     frame["D1"] = (day - card_origin).astype(float)
     for i in range(2, 16):
@@ -199,9 +180,7 @@ def generate(
     # ---- V1..V60 Vesta engineered features -----------------------------
     # Blocks share a missingness pattern, as they do in the real table.
     signal = fraud_mask.astype(float)
-    # Eight of the sixty carry a weak shift; the rest are pure noise. Loading
-    # every column with signal would let a boosted tree separate the classes
-    # perfectly and make the whole evaluation meaningless.
+    # Only 8 of 60 carry a weak shift; more would make the classes perfectly separable.
     informative_v = set(rng.choice(np.arange(1, 61), size=8, replace=False).tolist())
     for block_start in range(1, 61, 12):
         block_missing = rng.random(n) < rng.uniform(0.05, 0.55)
@@ -212,8 +191,7 @@ def generate(
             frame[f"V{j}"] = np.round(col, 4)
 
     # ---- identity table -------------------------------------------------
-    # IEEE-CIS supplies identity for roughly a quarter of transactions, with
-    # higher coverage for fraud.
+    # Identity covers about a quarter of rows, more often for fraud.
     has_identity = rng.random(n) < np.where(fraud_mask, 0.34, 0.23)
     idx = np.flatnonzero(has_identity)
     m = idx.size
@@ -236,10 +214,7 @@ def generate(
         f"{DEVICE_MODELS[d % len(DEVICE_MODELS)]}-{d:05d}" for d in dev_of_row
     ]
 
-    # Label noise: a share of fraud is never reported and a share of disputes
-    # are not fraud. Without it the task is separable and every model ties.
-    # Equal counts each way, so the flips add ambiguity without moving the
-    # class prior away from the benchmark's 3.5%.
+    # Label noise (unreported fraud, non-fraud disputes), equal both ways to keep the 3.5% prior.
     n_flip = int(round(label_noise * n_fr * 2))
     if n_flip:
         pos_idx = np.flatnonzero(fraud_mask)
