@@ -13,6 +13,7 @@
     python -m frds robustness         PGD transfer attack on the deployed model
     python -m frds baf                the same protocol on Bank Account Fraud
     python -m frds stream             replay through the streaming transport
+    python -m frds analytics          EDA, statistical tests and segment performance
     python -m frds score '{"TransactionAmt": 950, "card1": 13926}'
                                       score one raw transaction (the product)
 
@@ -56,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("stage", choices=[
         "acquire", "synth", "prepare", "features", "train", "fuse", "evaluate", "all",
-        "tune", "robustness", "baf", "stream", "score",
+        "tune", "robustness", "baf", "stream", "analytics", "score",
     ])
     parser.add_argument("payload", nargs="?", default=None,
                         help="score: a transaction as JSON, or @file.json")
@@ -144,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         "robustness": lambda: _robustness(cfg),
         "baf": lambda: _baf(cfg),
         "stream": lambda: _stream(cfg, args),
+        "analytics": lambda: _analytics(cfg),
         "all": lambda: pipeline.stage_all(
             cfg, skip_shap=args.skip_shap, skip_latency=args.skip_latency,
             force_refit=args.force_refit,
@@ -185,6 +187,12 @@ def _baf(cfg):
     log_stage(cfg, "baf", {"best_auc_pr": float(table["auc_pr"].max())},
               [cfg.path("reports") / "tables" / "baf_transfer.csv"])
     return table
+
+
+def _analytics(cfg):
+    from . import analytics
+
+    return analytics.run(cfg)
 
 
 def _stream(cfg, args):

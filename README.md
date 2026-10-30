@@ -177,6 +177,7 @@ python -m frds tune                   # Optuna search for XGBoost and LightGBM
 python -m frds robustness             # PGD transfer attack on attacker-controllable features
 python -m frds baf                    # the same protocol on Bank Account Fraud, with a fairness check
 python -m frds stream                 # replay through the streaming transport (in-memory)
+python -m frds analytics              # EDA, statistical tests, bootstrap intervals, segments
 docker compose --profile stream up    # the same through a Kafka broker
 ```
 
@@ -191,6 +192,9 @@ Set `tuning.use_tuned: true` to train with the tuned parameters, and
   see velocity raise the score, or confirm an outcome to update the card's fraud history.
 - *Live ledger*: the test span replayed in arrival order, with the alert queue, the
   reasons behind each alert and live score-drift monitoring.
+- *Fraud analytics*: fraud volume, rate and value with filters by period, product, card,
+  device, e-mail domain, amount and account history; daily trend and segment breakdowns;
+  the statistical tests, bootstrap confidence intervals and detection by segment.
 - *Model and monitoring*: model comparison, calibration, tiers and cost, explanation
   quality, drift, latency, robustness and the transfer results.
 

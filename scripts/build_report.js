@@ -1,5 +1,5 @@
 /**
- * Builds the Phase-3 report as a .docx:  node scripts/build_report.js
+ * Builds the Phase-3 report as a .docx:  node scripts/build_report.js [output.docx]
  */
 
 const fs = require("fs");
@@ -11,6 +11,8 @@ const {
 const R = require("./report_frontmatter.js");
 const { chapter1, chapter2 } = require("./report_chapters.js");
 const { chapter3, chapter4, chapter5, backMatter } = require("./report_results.js");
+
+const OUT = process.argv[2] ? path.resolve(process.argv[2]) : R.OUT;
 
 const body = [
   ...R.titlePage,
@@ -69,9 +71,9 @@ const doc = new Document({
 });
 
 Packer.toBuffer(doc).then((buf) => {
-  fs.mkdirSync(path.dirname(R.OUT), { recursive: true });
-  fs.writeFileSync(R.OUT, buf);
-  console.log(`\nwrote ${path.relative(R.ROOT, R.OUT)} (${(buf.length / 1024).toFixed(0)} KB, ${body.length} blocks)`);
+  fs.mkdirSync(path.dirname(OUT), { recursive: true });
+  fs.writeFileSync(OUT, buf);
+  console.log(`\nwrote ${path.relative(R.ROOT, OUT)} (${(buf.length / 1024).toFixed(0)} KB, ${body.length} blocks)`);
 }).catch((err) => {
   console.error("failed to build report:", err);
   process.exit(1);

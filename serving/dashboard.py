@@ -18,6 +18,7 @@ views = Path(__file__).resolve().parent / "views"
 page = st.navigation([
     st.Page(views / "check.py", title="Check a transaction", default=True),
     st.Page(views / "ledger.py", title="Live ledger"),
+    st.Page(views / "analytics.py", title="Fraud analytics"),
     st.Page(views / "monitor.py", title="Model and monitoring"),
 ])
 page.run()

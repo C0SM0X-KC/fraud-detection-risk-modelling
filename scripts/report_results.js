@@ -2,6 +2,7 @@
 
 const R = require("./report_frontmatter.js");
 const { extensionSections } = require("./report_extensions.js");
+const { analyticsEda, analyticsSegments } = require("./report_analytics.js");
 const {
   D, P, H1, H2, Bullets, T, Figure, Break, Caption,
   num, int, pct, label, modelByLabel, best, testPrev, tierRow, latRow, abl, worstPsi,
@@ -40,27 +41,36 @@ const sampleReason = ((D.reasons || [])[0] || {}).reason_text || "";
 /* =================================================== CHAPTER 3 ============ */
 const chapter3 = [
   H1("CHAPTER 3  METHODOLOGY"),
-  P("This chapter sets out how the system is built: the overall workflow and the layered " +
-    "architecture that realises it, the step-wise data preparation and model development " +
-    "procedure, the assumptions made, the model stack and the rationale for each tier, the " +
-    "risk modelling and decision layer, the benchmark used, the evaluation metrics and " +
-    "their justification, and the implementation."),
+  P("This chapter sets out how the system is built, from the workflow and architecture to " +
+    "the evaluation metrics and the implementation."),
 
   H2("3.1  Overall Methodology"),
-  P("The system is organised as a five-stage pipeline with a feedback loop. A transaction " +
-    "enters at the ingestion stage, where it is validated and placed in chronological " +
-    "order. Preprocessing and feature engineering then derive the behavioural, temporal and " +
-    "relational features and construct the transaction graph. The imbalance-aware model " +
-    "layer scores the transaction using several complementary models in parallel. The " +
-    "fusion and risk modelling stage combines those scores, calibrates the result and maps " +
-    "it to a bounded risk score with an assigned tier. The decision, explanation and " +
-    "monitoring stage acts on that tier, records the SHAP reason codes, and emits the drift " +
-    "and latency telemetry. The feedback loop returns confirmed fraud labels, analyst " +
-    "outcomes and drift alerts to the earlier stages, where they drive threshold re-tuning " +
-    "and scheduled retraining; it is this loop that makes the system adaptive rather than " +
-    "static, and it is the direct response to gap G5."),
-  ...Figure("reports/figures/from_phase1/image3.png",
-    "Figure 3.1  Overall workflow of the proposed system"),
+  P("The system is a five-stage pipeline with a feedback loop (Figure 3.1): ingestion " +
+    "validates and orders each transaction; feature engineering derives behavioural, " +
+    "temporal and relational features; the model layer scores it with several models; " +
+    "fusion and risk modelling combines and calibrates the scores into a risk score and " +
+    "tier; and the decision stage acts, records reason codes and emits drift and latency " +
+    "telemetry. Confirmed labels, analyst outcomes and drift alerts feed back to drive " +
+    "re-tuning and retraining, the response to gap G5."),
+  ...Figure("reports/figures/workflow.png",
+    "Figure 3.1  Overall workflow of the proposed system", 600),
+  P("Viewed as an analytics process, the work follows the CRISP-DM cycle (Cross-Industry " +
+    "Standard Process for Data Mining), and each of its phases maps to a part of this report:"),
+  ...Bullets([
+    "Business understanding: the cost of fraud, the asymmetry of the two error types and " +
+    "the operational actions available (Chapter 1 and Section 3.6).",
+    "Data understanding: data-quality profiling, exploratory analysis and statistical " +
+    "testing of the benchmark (Sections 4.2 and 4.3).",
+    "Data preparation: cleaning, encoding, the chronological split and feature engineering " +
+    "(Table 3.1, block A).",
+    "Modelling: the model families and the decision layer (Sections 3.5 and 3.6, Table 3.1, " +
+    "block B).",
+    "Evaluation: model comparison, calibration, risk tiers, confidence intervals and the " +
+    "segment breakdown (Sections 4.4 to 4.7), followed by explanation, drift and " +
+    "sensitivity analyses (Sections 4.8 to 4.12).",
+    "Deployment: the online feature store, API, analyst console and streaming transport " +
+    "(Section 4.15).",
+  ]),
 
   H2("3.2  Detailed Methodology"),
   P("The procedure decomposes into two blocks. Block A covers data preparation and Block B " +
@@ -87,6 +97,10 @@ const chapter3 = [
     ["A.5  Imbalance handling",
       "Class weighting at the algorithm level, applied to the training fold only and never " +
       "to the validation or test fold, so that reported metrics reflect the true class prior."],
+    ["A.6  Exploratory analysis",
+      "Data-quality profile, distributions of fraud by amount, time and segment, fraud " +
+      "concentration across accounts, and chi-square and Mann-Whitney tests with effect " +
+      "sizes, all on the training span only."],
     ["B.1  Baselines",
       "Logistic regression and random forest, establishing the performance floor against " +
       "which every later model is judged."],
@@ -100,7 +114,8 @@ const chapter3 = [
       "A stacking meta-learner over the base model probabilities, followed by isotonic " +
       "calibration and mapping to the 0-100 risk score with tier assignment."],
     ["B.5  Evaluation",
-      "AUC-PR, recall at a fixed false-positive rate, F1 and MCC; PSI drift across temporal " +
+      "AUC-PR, recall at a fixed false-positive rate, F1 and MCC, with day-block bootstrap " +
+      "confidence intervals and a breakdown by segment; PSI drift across temporal " +
       "windows; SHAP attribution; and per-transaction inference latency at p50 and p95."],
   ], [2.2, 7.8], { numericFrom: 99 }),
   Caption("Table 3.1  Data preparation and model development steps"),
@@ -109,7 +124,7 @@ const chapter3 = [
   ...Bullets([
     "The labels supplied with the benchmark are treated as ground truth, although in " +
     "production fraud labels arrive with delay and a proportion of fraud is never reported. " +
-    "Section 4.9 measures the consequence of this assumption rather than leaving it stated.",
+    "Section 4.11 measures the consequence of this assumption rather than leaving it stated.",
     "The transaction ordering derived from the TransactionDT field reflects true " +
     "chronological order, which permits the temporal split and the drift analysis.",
     "Replaying the historical dataset as an event stream is an acceptable proxy for a live " +
@@ -123,18 +138,13 @@ const chapter3 = [
   ]),
 
   H2("3.4  Proposed System Architecture"),
-  P("The same system viewed as five layers describes where each stage executes. The " +
-    "ingestion layer receives the transaction event together with identity, device and " +
-    "session attributes, and performs schema validation and de-duplication. The feature " +
-    "layer maintains an offline feature store for training features and an online velocity " +
-    "cache for the real-time counters, and hosts the graph builder. The model layer runs " +
-    "the scorers in parallel. The decision layer holds the stacking meta-learner, the " +
-    "calibration model, the risk score and the action policy. The governance layer, which " +
-    "is a first-class component rather than an addition, stores the SHAP reason codes for " +
-    "each alert, runs the PSI drift monitor and the retraining trigger, and records " +
-    "latency, throughput and alert-volume metrics."),
-  ...Figure("reports/figures/from_phase1/image4.png",
-    "Figure 3.2  Layered architecture of the proposed system"),
+  P("Viewed as five layers (Figure 3.2): ingestion validates and de-duplicates events; " +
+    "the feature layer holds the offline feature store, the online velocity cache and the " +
+    "graph builder; the model layer runs the scorers; the decision layer holds fusion, " +
+    "calibration, the risk score and the action policy; and the governance layer stores " +
+    "reason codes, monitors drift and records latency and alert volume."),
+  ...Figure("reports/figures/architecture.png",
+    "Figure 3.2  Layered architecture of the proposed system", 600),
 
   H2("3.5  Model Stack and Rationale"),
   P("The baseline tiers are retained deliberately: a comparison without a floor cannot " +
@@ -183,11 +193,8 @@ const chapter3 = [
       "attached to the alert"],
   ], [1, 1.4, 2.2, 5.4], { numericFrom: 99 }),
   Caption("Table 3.3  Risk tiers, score bands and corresponding actions"),
-  P("The importance of calibration should be stated plainly: a model that ranks well but is " +
-    "uncalibrated cannot be used for decisioning, because thresholds set on uncalibrated " +
-    "scores do not correspond to any real business cost. This is the specific respect in " +
-    "which the present work extends beyond the detection-only studies reviewed in Chapter " +
-    "2, and it is the response to gap G3."),
+  P("Thresholds on an uncalibrated score correspond to no real business cost, so " +
+    "calibration is what makes decisioning possible; this is the response to gap G3."),
 
   H2("3.7  Dataset Specification"),
   T([
@@ -198,7 +205,7 @@ const chapter3 = [
     ["Observation span", "182 days, chronologically ordered", "8 months, chronologically ordered"],
     ["Fraud type", "Card-not-present e-commerce fraud", "Bank account opening fraud"],
     ["Role in the project", "Main benchmark for all model comparisons",
-      "Transfer and fairness check (section 4.13)"],
+      "Transfer and fairness check (section 4.14)"],
   ], [2.2, 4, 3.8], { numericFrom: 99 }),
   Caption("Table 3.4  Benchmark dataset specification"),
 
@@ -226,17 +233,11 @@ const chapter3 = [
   Caption("Table 3.5  Evaluation metrics and their justification"),
 
   H2("3.9  Implementation and Tools Used"),
-  P("The system is implemented as a configuration-driven Python package. Every threshold, " +
-    "window and hyper-parameter is declared in a single YAML file rather than embedded in " +
-    "code, so a result can be traced back to the configuration that produced it. Each of " +
-    "the five stages is a separate command that reads what the previous stage wrote, so any " +
-    "stage can be re-run in isolation, and per-model checkpointing means an interrupted " +
-    "training run resumes rather than restarting."),
-  P("One design rule enforced throughout the feature layer deserves separate statement, " +
-    "because the validity of every result in Chapter 4 depends on it: no aggregate may be " +
-    "computed from a transaction later in time than the one being scored. This is enforced " +
-    "in the implementation and verified by a test that rewrites the later half of a dataset " +
-    "and asserts that no feature value in the earlier half changes."),
+  P("The system is a configuration-driven Python package: every threshold, window and " +
+    "hyper-parameter is declared in one YAML file, and each stage is a separate command " +
+    "that can be re-run in isolation. One rule underpins every result in Chapter 4: no " +
+    "aggregate may use a transaction later than the one being scored, verified by a test " +
+    "that rewrites the later half of a dataset and checks that no earlier feature changes."),
   T([
     ["Category", "Tools and libraries"],
     ["Language and data handling", "Python 3.12; pandas, NumPy, PyArrow"],
@@ -245,6 +246,9 @@ const chapter3 = [
       "Optuna for Bayesian hyper-parameter search"],
     ["Deep and graph models",
       "PyTorch on a cloud GPU (Kaggle, NVIDIA T4); a custom temporal heterogeneous GNN"],
+    ["Data analysis and statistics",
+      "SciPy for chi-square and Mann-Whitney tests; bootstrap confidence intervals; an " +
+      "interactive analytics page in the console built with Altair"],
     ["Explainability and monitoring",
       "SHAP (exact TreeSHAP) with plain-language reason codes; a custom PSI implementation " +
       "for offline and live drift"],
@@ -281,13 +285,6 @@ const tierRows = [
   }),
 ];
 
-const psiRows = [
-  ["Window", "Transactions", "Mean score", "PSI vs window 0", "Status"],
-  ...(D.psi || []).map((r) => [
-    r.window, int(r.rows), num(r.mean_score, 4), num(r.psi_vs_window0, 4), r.status,
-  ]),
-];
-
 const latencyRows = [
   ["Scoring mode", "p50 (ms)", "p95 (ms)", "p99 (ms)", "Mean (ms)"],
   ...(D.latency || []).map((r) => [
@@ -308,53 +305,25 @@ const ablationRows = [
   }),
 ];
 
-const tuningRows = (() => {
-  const rows = D.tuning || [];
-  const byModel = {};
-  rows.forEach((r) => {
-    const m = r.model;
-    byModel[m] = byModel[m] || { n: 0, min: Infinity, max: -Infinity, best: null };
-    const t = Number(r.test_auc_pr);
-    byModel[m].n += 1;
-    byModel[m].min = Math.min(byModel[m].min, t);
-    byModel[m].max = Math.max(byModel[m].max, t);
-    if (!byModel[m].best || Number(r.valid_auc_pr) > Number(byModel[m].best.valid_auc_pr)) {
-      byModel[m].best = r;
-    }
-  });
-  return [
-    ["Tier", "Configurations", "Test AUC-PR range", "Best on validation", "Its test AUC-PR"],
-    ...Object.entries(byModel).map(([m, v]) => [
-      label(m), String(v.n), `${num(v.min, 3)} - ${num(v.max, 3)}`,
-      num(v.best.valid_auc_pr, 3), num(v.best.test_auc_pr, 3),
-    ]),
-  ];
-})();
-
-const tuningMaxTest = (D.tuning || []).reduce(
-  (m, r) => Math.max(m, Number(r.test_auc_pr || 0)), 0);
-const gnnBest = ((D.tuningBest || []).find((r) => r.model === "hetero_gnn")) || {};
-
-const shapRows = [
-  ["Rank", "Feature", "Mean |SHAP|"],
-  ...(D.shap || []).slice(0, 10).map((r, i) => [i + 1, r.feature, num(r.mean_abs_shap, 4)]),
-];
 
 const chapter4 = [
   H1("CHAPTER 4  RESULT ANALYSIS"),
-  P("This chapter reports what the implemented system achieves on the benchmark. It states " +
-    "the experimental setup, compares the model families under the single protocol, " +
-    "examines the effect of calibration, evaluates the risk tiers against the cost model, " +
-    "presents the explanation and drift outputs, measures the cost of serving, and closes " +
-    "with a controlled ablation of the labelling assumption that the headline figures rest " +
-    "on. Where a result departs from the expectation set by the literature, its cause is " +
-    "analysed in the section concerned."),
+  P("This chapter follows the four levels of analytics introduced in Section 1.1. After the " +
+    "setup (Section 4.1) it describes the data and tests which attributes are associated " +
+    "with fraud (Sections 4.2 and 4.3), compares the predictive models (Section 4.4), " +
+    "evaluates the calibrated score and the prescriptive decision policy (Sections 4.5 and " +
+    "4.6), and measures how reliable the results are and where the system is weak (Section " +
+    "4.7). Explanation, drift, serving cost, the labelling assumption, further experiments, " +
+    "robustness, transfer, the deployed product and wider impact follow (Sections 4.8 to " +
+    "4.16), with conclusions in Section 4.17."),
 
   H2("4.1  Experimental Setup"),
-  P("All figures in this chapter are computed on the final chronological span of the " +
+  P("Unless stated otherwise, every model result in this chapter is computed on the final " +
+    "chronological span of the " +
     "benchmark, which no model saw during training and which the calibrator was not fitted " +
     "on. The split is made on the time value rather than on row position, so every " +
-    "transaction sharing a timestamp falls on the same side of a boundary."),
+    "transaction sharing a timestamp falls on the same side of a boundary. The exploratory " +
+    "and statistical analysis in Sections 4.2 and 4.3 uses the training span only."),
   T([
     ["Span", "Transactions", "Fraud", "Prevalence", "Days"],
     ["Training", int(D.split?.train?.rows), int(D.split?.train?.fraud),
@@ -395,15 +364,16 @@ const chapter4 = [
     `${D.spec?.dropped?.high_null ?? "-"} further columns were dropped for exceeding the ` +
     `missingness threshold. Pruning decisions were made on the training span alone.`),
 
-  H2("4.2  Model Comparison"),
-  P("Table 4.3 reports every model under the identical protocol required by objective 3. " +
+  ...analyticsEda,
+
+  H2("4.4  Model Comparison"),
+  P("Table 4.7 reports every model under the identical protocol required by objective 3. " +
     "The no-skill AUC-PR on this span equals the prevalence, " + num(testPrev) + ", so that " +
     "is the floor against which each row should be read."),
   T(comparisonRows, [2.6, 1.3, 1.3, 1.2, 1.2, 1.6, 1.6]),
-  Caption("Table 4.3  Model comparison on the held-out test span"),
-  ...Figure("reports/figures/model_comparison.png", "Figure 4.1  Model comparison by AUC-PR"),
+  Caption("Table 4.7  Model comparison on the held-out test span"),
   ...Figure("reports/figures/pr_curves.png",
-    "Figure 4.2  Precision-recall curves on the test span"),
+    "Figure 4.8  Precision-recall curves on the test span"),
   P(`The strongest model attains an AUC-PR of ${num(best?.auc_pr)}, which is ` +
     `${num(bestRow.auc_pr_lift_over_prevalence, 1)} times the no-skill floor. The same model ` +
     `attains an accuracy of ${num(bestRow.accuracy_not_a_headline_metric, 4)}, against ` +
@@ -412,63 +382,45 @@ const chapter4 = [
     `the AUC-PRs differ by a factor of ${num(bestRow.auc_pr_lift_over_prevalence, 0)}. This ` +
     `reproduces the argument of Chapter 2 on the project's own results, and it is why ` +
     `accuracy is not used to compare models.`),
-  P("Three observations deserve comment. The first is that the tabular tier ranks above the " +
-    "baselines, as expected, by a substantial margin."),
-  P("The second concerns stacking. The literature reviewed in Chapter 2 identifies " +
-    "stacking as the strongest fusion strategy; on this benchmark a simpler alternative " +
-    "outperforms it. The meta-learner was fitted as specified, on out-of-fold base scores, " +
-    "and two mechanisms limit it. The base " +
-    "models make highly correlated errors, so there is little complementary structure for a " +
-    "meta-learner to exploit; and the meta-learner is trained on scores produced by fold " +
-    "models while being applied to scores from the final models, a gap that widens under " +
-    "the refit protocol described in section 4.1. The decision layer therefore chooses, on " +
-    "the calibration holdout, between the stacked score, each base score, and equal-weight " +
-    "averages of the two and three strongest tabular models in log-odds - fusion with no " +
-    "weights to learn, so the fold-to-final gap cannot hurt it. On this benchmark it " +
-    `selects ${selectedPhrase}, whose validation AUC-PR of ` +
-    `${num(D.fusion?.validation_ranking?.[selected])} exceeds the stack's ` +
-    `${num(D.fusion?.validation_ranking?.stacked)}. The finding is that an ensemble of ` +
-    "correlated tabular learners is best combined by a simple average; a learned combiner " +
-    "adds complexity without a corresponding gain."),
-  P("The third is that the sequential and relational tiers score well below the tabular " +
-    "tier. Section 4.8 analyses the cause."),
+  P("The tabular tier ranks well above the baselines. Stacking, identified in Chapter 2 as " +
+    "the strongest fusion strategy, is outperformed here by a simpler alternative: the base " +
+    "models make highly correlated errors, leaving little for a meta-learner to exploit, and " +
+    "the meta-learner is trained on fold-model scores but applied to final-model scores. The " +
+    "decision layer therefore chooses on the calibration holdout between the stack, each " +
+    "base score and equal-weight log-odds averages of the strongest tabular models, and " +
+    `selects ${selectedPhrase} (validation AUC-PR ` +
+    `${num(D.fusion?.validation_ranking?.[selected])} against the stack's ` +
+    `${num(D.fusion?.validation_ranking?.stacked)}). The sequential and relational tiers ` +
+    "score well below the tabular tier; Section 4.12 analyses why."),
 
-  H2("4.3  Effect of Calibration"),
-  P("Calibration is what converts a ranking into a probability that a threshold can be set " +
-    "on, and the protocol matters as much as the method. Refitting the final model on the " +
-    "validation span improves detection, because on a chronological split that span is the " +
-    "data closest in time to the test period. A calibrator fitted before the refit, however, " +
-    "would be applied to scores from a different model, and in a preliminary run this " +
-    "mismatch increased expected calibration error six-fold and distorted the risk tiers."),
-  P("The protocol adopted instead cuts the validation span in two. The earlier portion " +
-    "joins the training data for the refit; the later portion is held back entirely and " +
-    "scored by the refitted model. The calibrator is fitted on that holdout, so it sees the " +
-    "same model it will be applied to, on rows that model never trained on. The same " +
-    "holdout is used to choose which candidate score the decision layer consumes."),
+  H2("4.5  Effect of Calibration"),
+  P("Calibration converts a ranking into a probability that a threshold can be set on. The " +
+    "validation span is cut in two: the earlier portion joins the training data for the " +
+    "final refit, and the later portion is held back, scored by the refitted model and used " +
+    "to fit the isotonic calibrator, so the calibrator sees the same model it will be " +
+    "applied to. In a preliminary run, a calibrator fitted before the refit increased " +
+    "expected calibration error six-fold."),
   T([
     ["Quantity", "Before calibration", "After calibration"],
     ["Expected calibration error", num(D.fusion?.ece_before, 5), num(D.fusion?.ece_after, 5)],
     ["AUC-PR", num(selectedRaw.auc_pr), num(decision.auc_pr)],
     ["Brier score", num(selectedRaw.brier, 5), num(decision.brier, 5)],
   ], [3.4, 3.3, 3.3]),
-  Caption("Table 4.4  Effect of isotonic calibration"),
+  Caption("Table 4.8  Effect of isotonic calibration"),
   ...Figure("reports/figures/reliability.png",
-    "Figure 4.3  Reliability of the calibrated risk score"),
-  P("Expected calibration error falls by roughly two orders of magnitude, and the Brier " +
-    "score improves correspondingly. AUC-PR falls very slightly, which is expected and not " +
-    "a defect: isotonic regression is a monotone step function, so it maps ranges of raw " +
-    "scores onto a single calibrated value, and the ties this creates cost a small amount " +
-    "of ranking resolution. The trade is worth making, because a threshold on the " +
-    "uncalibrated score corresponds to no business quantity at all, whereas a threshold on " +
-    "the calibrated score corresponds to an expected loss."),
+    "Figure 4.9  Reliability of the calibrated risk score"),
+  P("Expected calibration error falls by roughly two orders of magnitude and the Brier " +
+    "score improves. AUC-PR falls very slightly because isotonic regression maps ranges of " +
+    "raw scores to one value, creating ties; the trade is worth making, since only a " +
+    "threshold on the calibrated score corresponds to an expected loss."),
 
-  H2("4.4  Risk Tiers and Operational Cost"),
+  H2("4.6  Risk Tiers and Operational Cost"),
   P("The calibrated probability is mapped to the 0-100 risk score and assigned to the tiers " +
     "specified in Table 3.3."),
   T(tierRows, [1, 1.8, 1.5, 1.5, 1.3, 1.5, 1.2]),
-  Caption("Table 4.5  Risk-tier performance under the specified score bands"),
+  Caption("Table 4.9  Risk-tier performance under the specified score bands"),
   ...Figure("reports/figures/score_distribution.png",
-    "Figure 4.4  Risk-score distribution and tier boundaries"),
+    "Figure 4.10  Risk-score distribution and tier boundaries"),
   P(`The high-risk tier contains ${pct(highTier.share_of_volume)} of transaction volume and ` +
     `${pct(highTier.share_of_all_fraud)} of all fraud in the period, at a precision of ` +
     `${pct(highTier.precision_in_tier)}. Nine in ten items an analyst opens from this tier ` +
@@ -488,48 +440,32 @@ const chapter4 = [
     ["Cost if nothing were flagged", int(costCfg.cost_if_nothing_flagged)],
     ["Reduction in modelled loss", `${num(costCfg.cost_reduction_pct, 1)} per cent`],
   ], [5, 5]),
-  Caption("Table 4.6  Modelled cost of the decision policy"),
+  Caption("Table 4.10  Modelled cost of the decision policy"),
   P("Cost figures use the configured ratio in which a missed fraud costs the transaction " +
-    "amount and a false decline costs a fixed review-and-goodwill charge. The absolute " +
-    "currency values are institution-specific; the ratio is what the threshold search " +
-    "responds to. Under this model the policy removes roughly two-thirds of the loss that " +
-    "taking no action would incur."),
+    "amount and a false decline costs a fixed review-and-goodwill charge; the absolute values " +
+    "are institution-specific. The policy removes roughly two-thirds of the loss that taking " +
+    "no action would incur."),
 
-  H2("4.5  Explainability"),
+  ...analyticsSegments,
+
+  H2("4.8  Explainability"),
   P("Every transaction in the high-risk tier carries the features that drove its score, so " +
-    "that an adverse decision can be explained to a reviewer and audited afterwards. " +
-    "Attribution is taken from the score that makes the decision, so that every reason code " +
-    "describes a decision that was actually made. " +
+    "that an adverse decision can be explained and audited. Attribution is taken from the " +
+    "score that makes the decision" +
     (String(selected).startsWith("blend")
-      ? "The selected score is an equal-weight average of its members in log-odds, so its " +
-        "attribution is exactly the average of the members' TreeSHAP values. "
-      : "") +
-    "Attributing through any other model would yield reasons for a decision the system did " +
-    "not make, which cannot serve as an audit trail."),
-  P("Two properties of these values were verified. The first is local " +
-    "accuracy: for every explained transaction the explainer's base value plus the sum of " +
-    "the feature contributions reconstructs the model's own output, to within 1e-5, and " +
-    "this is now checked on every run. The second concerns what the numbers mean. They are " +
-    "contributions to the model's log-odds before calibration, and because isotonic " +
-    "calibration is monotone they preserve each transaction's ranking and each reason's " +
-    "direction, but not the scale of the displayed risk score. Their baseline is also not " +
-    "the fraud rate: class weighting moves the model's expected output to a 50 per cent " +
-    "class-weighted prior, so a positive contribution means evidence above that prior. A " +
-    "small number of legitimate transactions consequently carry a positive total yet " +
-    "calibrate to low risk, which is the correct behaviour rather than an inconsistency."),
-  T(shapRows, [1, 5.5, 3.5]),
-  Caption("Table 4.7  Global SHAP attribution over high-risk alerts"),
+      ? ", an equal-weight log-odds average, so it is exactly the average of the members' " +
+        "TreeSHAP values. "
+      : ". ") +
+    "On every run the base value plus the contributions is checked to reconstruct the " +
+    "model's output to within 1e-5. The contributions are in log-odds before calibration, so " +
+    "they preserve each reason's direction but not the scale of the displayed risk score."),
   ...Figure("reports/figures/shap_importance.png",
-    "Figure 4.5  Global SHAP attribution over high-risk alerts"),
+    "Figure 4.12  Global SHAP attribution over high-risk alerts"),
   P("The ranking is dominated by the causal prior-fraud-rate features at account and card " +
     "level, followed by the per-entity aggregate ratios, the Vesta engineered columns and the " +
-    "counting features. It is worth noting that attribution explains the model faithfully, " +
-    "including anything the model has over-fitted to, so an unexpected feature in a reason " +
-    "code is a statement about the model rather than a fault in the explanation. That the account-level " +
-    "prior fraud rate dominates is intuitive - an account that has already been defrauded " +
-    "is the single best predictor that the next transaction on it is fraudulent - but it " +
-    "is also a dependency on a labelling assumption, and section 4.9 quantifies what that " +
-    "dependency is worth."),
+    "counting features. That the account-level prior fraud rate dominates matches Section " +
+    "4.2 - fraud repeats on accounts already used for fraud - but it is also a dependency " +
+    "on a labelling assumption, which section 4.11 quantifies."),
 
   P("Two additions make the explanations usable and checkable. First, every attribution is " +
     "rendered as a sentence about the transaction rather than a feature name - the first " +
@@ -538,119 +474,52 @@ const chapter4 = [
     "Second, attributions are summed within evidence families, so that correlated columns " +
     "are read as one piece of evidence rather than many."),
   T(groupRows, [4.2, 1.2, 2.2, 1.4]),
-  Caption("Table 4.8  Attribution by evidence family over high-risk alerts"),
-  ...Figure("reports/figures/shap_groups.png",
-    "Figure 4.6  Attribution by evidence family over high-risk alerts"),
-  P("A reason code is only useful if it names what actually drove the score, so the " +
-    "explanations were tested directly with a deletion test. For each alert, the k " +
-    "features with the largest positive attribution are reset to their median over " +
-    "ordinary traffic and the transaction is re-scored; the same is done with k features " +
-    "chosen at random."),
+  Caption("Table 4.13  Attribution by evidence family over high-risk alerts"),
+  P("The explanations were tested with a deletion test: for each alert the k features with " +
+    "the largest positive attribution are reset to their median over ordinary traffic and " +
+    "the transaction is re-scored, against k features chosen at random."),
   T(faithRows, [1.6, 1.5, 1.6, 1.7, 1, 2]),
-  Caption("Table 4.9  Explanation faithfulness: deletion test on high-risk alerts"),
-  ...Figure("reports/figures/explanation_faithfulness.png",
-    "Figure 4.7  Fall in risk score when the stated reasons are removed"),
+  Caption("Table 4.14  Explanation faithfulness: deletion test on high-risk alerts"),
   P(`Removing the top three stated reasons of an alert lowers its risk score by ` +
     `${num(faith3.mean_score_drop_top, 1)} points on average, against ` +
     `${num(faith3.mean_score_drop_random, 1)} for three random features, and takes ` +
     `${pct(faith3.share_falling_below_half_top, 0)} of alerts below half their score. The ` +
     "stated reasons therefore identify the evidence on which each decision rests."),
 
-  H2("4.6  Concept Drift"),
-  P("Population Stability Index is computed on the model's own score distribution across " +
-    "equal-duration windows of the test timeline. Bin edges are taken from the reference " +
-    "window and reused for every later window; recomputing quantile edges per window would " +
-    "make every window appear identical by construction."),
-  T(psiRows, [1.2, 2, 2, 2.4, 2.4]),
-  Caption("Table 4.10  Population Stability Index across temporal windows"),
+  H2("4.9  Concept Drift"),
+  P("Population Stability Index (PSI) is computed on the model's score distribution across " +
+    "equal-duration windows of the test timeline, with bin edges fixed from the first window."),
   ...Figure("reports/figures/psi_drift.png",
-    "Figure 4.8  Score drift across the test timeline"),
+    "Figure 4.13  Score drift across the test timeline"),
   P(`The worst observed PSI is ${num(worstPsi, 4)}, far below the conventional 0.10 watch ` +
-    "threshold and the 0.25 retraining threshold. The score distribution is therefore " +
-    "stable over the six weeks of the test span. Six weeks is a short horizon for concept " +
-    "drift, so the result establishes that the model does not degrade in the period " +
-    "immediately after training, not that it will remain stable indefinitely. The observed " +
-    "fraud prevalence itself moves from 3.4 per " +
-    "cent in the first window to 4.2 per cent in the last, so the underlying population is " +
-    "not static even while the score distribution is. The analyst console applies the same " +
-    "measurement live, computing the PSI of each window of scored traffic against the " +
-    "calibration holdout and raising a retraining alert above 0.25."),
+    "threshold and the 0.25 retraining threshold, so the score distribution is stable over " +
+    "the six weeks of the test span - a short horizon, which shows no degradation right " +
+    "after training rather than indefinite stability. Fraud prevalence itself moves from " +
+    "3.4 to 4.2 per cent across the windows. The analyst console computes the same PSI live " +
+    "and raises a retraining alert above 0.25."),
 
-  H2("4.7  Inference Latency"),
-  P("Two latencies are reported. Table 4.11 times every enabled tier together - all base " +
-    "models, the stacking meta-learner and the calibrator - on precomputed feature rows, as " +
-    "an upper bound on the cost of the full benchmark stack; the graph tier is warmed to the " +
-    "start of the test span and scored online. Section 4.14 times the path a deployed request " +
-    "actually takes, from raw transaction to decision with the features computed online, " +
-    "through the model the decision layer selected."),
+  H2("4.10  Inference Latency"),
+  P("Table 4.15 times every enabled tier together - all base models, the meta-learner and " +
+    "the calibrator - on precomputed feature rows, an upper bound on the cost of the full " +
+    "benchmark stack. Section 4.15 times the path a deployed request actually takes."),
   T(latencyRows, [3, 1.8, 1.8, 1.8, 1.6]),
-  Caption("Table 4.11  Inference latency of the complete benchmark stack"),
+  Caption("Table 4.15  Inference latency of the complete benchmark stack"),
   P(`The batched path costs ${num(batch1k.mean_ms, 3)} ms per transaction, equivalent to ` +
     `roughly ${int(Math.round(1000 / Number(batch1k.mean_ms || 1)))} transactions per ` +
-    `second, which satisfies the real-time requirement with margin. The single-transaction ` +
-    `path through the full stack is slower: at a median of ${num(single.p50_ms, 1)} ms and a ` +
-    `95th percentile of ${num(single.p95_ms, 1)} ms it is roughly three orders of magnitude ` +
-    `slower per transaction than the batched path. The cost is per-call overhead in the ` +
-    `scientific Python stack - dataframe construction, validation and dispatch are paid ` +
-    `once per call regardless of batch size - rather than model complexity. This finding ` +
-    `shaped the serving design: the product path of section 4.14 serves only the selected ` +
-    `score through the native single-row interface of the boosters, computes features from ` +
-    `an online store, and meets the requirement.`),
+    `second. One transaction at a time through the full stack takes ${num(single.p50_ms, 1)} ` +
+    `ms at the median and ${num(single.p95_ms, 1)} ms at the 95th percentile, owing to ` +
+    `per-call overhead in the Python stack rather than model complexity. This shaped the ` +
+    `serving design: the product path of section 4.15 serves only the selected score through ` +
+    `the boosters' native single-row interface, and meets the requirement.`),
 
-  H2("4.8  Analysis of the Sequential and Relational Tiers"),
-  P("The reviewed literature suggests that sequential and relational models capture signal " +
-    "beyond the reach of a tabular model. On this benchmark both tiers score well below the " +
-    "tabular tier, and since objective 3 requires a fair comparison, it is first necessary " +
-    "to establish whether the gap reflects the tiers themselves or insufficient tuning."),
-  P("A grid search was therefore run over both tiers: for the sequence model, the grouping " +
-    "entity, the history window, the hidden width and the learning rate; for the graph " +
-    "model, the hidden width, the memory decay and the learning rate. Configurations were " +
-    "selected on the validation span and the selected configuration alone was scored on " +
-    "test."),
-  T(tuningRows, [2.6, 1.6, 2, 2, 1.8]),
-  Caption("Table 4.12  Hyper-parameter search over the sequential and relational tiers"),
-  P("No configuration in either grid lifted test AUC-PR above " +
-    `${num(tuningMaxTest, 3)}. The gap is therefore a property of the tiers on this ` +
-    "benchmark rather than of the training budget they were given."),
-  P("Two structural explanations fit the evidence. The first concerns sequence length. The " +
-    "benchmark contains 590,540 transactions distributed across roughly 274,000 distinct " +
-    "synthetic accounts, an average of just over two transactions per account, so a model " +
-    "given a window of prior transactions sees padding for almost every row. Grouping by " +
-    "card rather than by account raises the average to about forty-three transactions per " +
-    "entity, and was included in the grid for exactly this reason; it gave no consistent " +
-    "improvement, so short histories are at most a partial explanation."),
-  P("The second, and better supported, explanation is that the grid exposes a consistent " +
-    "gap between validation and test performance. The configuration selected for the graph " +
-    "tier reaches " +
-    `${num(gnnBest.valid_auc_pr, 3)} on validation but only ${num(gnnBest.test_auc_pr, 3)} ` +
-    "on test, and the sequence tier behaves the same way. The tabular models show no such " +
-    "collapse between the two later spans. The deep tiers are therefore fitting " +
-    "period-specific behaviour that does not carry forward, which is a drift result as much " +
-    "as a capacity result, and it is consistent with the prevalence shift reported in " +
-    "section 4.6."),
-  P("A second cause is that the graph signal has already been extracted. The feature layer " +
-    "computes degree, distinct-partner counts and causal neighbourhood fraud rates over the " +
-    "same card-merchant-device graph the network operates on, and those columns are " +
-    "available to the boosting models. The SHAP ranking in Table 4.7 confirms that the " +
-    "boosting model relies on them heavily. The relational tier is therefore competing " +
-    "against a tabular model that can already see a projection of the graph, and the " +
-    "marginal information it adds is small. The conclusion is therefore not that relational " +
-    "learning is ineffective for fraud detection, but that on this benchmark an explicit graph feature " +
-    "set captures most of what an end-to-end graph network would have learned, at a " +
-    "fraction of the training cost."),
-
-  H2("4.9  Sensitivity to the Labelling Assumption"),
+  H2("4.11  Sensitivity to the Labelling Assumption"),
   P("Section 3.3 assumes that the outcome of an earlier transaction is known when a later " +
     "one is scored. In production it is not: a chargeback takes weeks to confirm. Since " +
-    "Table 4.7 shows the prior-fraud-rate features dominating the model, this assumption " +
-    "has a material effect on reported performance, and it is measured directly. A " +
-    "controlled ablation was run in which a label is withheld from the " +
-    "target-encoding features until a fixed delay after its transaction, with everything " +
-    "else - rows, split, hyper-parameters - held fixed."),
+    "the prior-fraud-rate features dominate the model (Figure 4.12), a controlled ablation " +
+    "withholds each label from those features until a fixed delay after its transaction, " +
+    "with everything else held fixed."),
   T(ablationRows, [2.6, 2, 1.5, 2, 1.5]),
-  Caption("Table 4.13  Label-delay ablation"),
-  ...Figure("reports/figures/label_delay_ablation.png",
-    "Figure 4.9  Sensitivity of performance to label-confirmation delay"),
+  Caption("Table 4.16  Label-delay ablation"),
   P(`Introducing a thirty-day confirmation delay reduces AUC-PR from ${num(abl("delay_0", "xgboost").auc_pr)} ` +
     `to ${num(abl("delay_30", "xgboost").auc_pr)}, retaining ` +
     `${abl("delay_30", "xgboost").auc_pr_retained_pct} per cent of the original performance. ` +
@@ -661,71 +530,54 @@ const chapter4 = [
   P(`Three conclusions follow. About ` +
     `${num(100 - Number(abl("delay_30", "xgboost").auc_pr_retained_pct), 0)} per cent of the ` +
     "headline performance depends on outcomes being known sooner than a real chargeback " +
-    "cycle would supply them. The sensitivity is concentrated in the first month, which " +
-    "means the value of these features lies in recent history rather than in long-run " +
-    "reputation. And the features nonetheless remain worthwhile: at a sixty-day delay they " +
-    `are still worth ${num(abl("delay_60", "xgboost").auc_pr - abl("none", "xgboost").auc_pr, 3)} ` +
-    "AUC-PR over removing them, so the correct engineering decision is to build them with " +
-    "a delay matched to the institution's actual confirmation window rather than to discard " +
-    "them or to trust them unconditionally."),
-  P("In the preliminary Phase-3 run a thirty-day delay retained 67.5 per cent of " +
-    `performance; the final system retains ${abl("delay_30", "xgboost").auc_pr_retained_pct} ` +
-    "per cent. The gain comes from a correction to the feature layer: the per-entity " +
-    "running means now skip missing values, where previously a single missing entry in the " +
-    "time-ordered array blanked the mean for every later row, leaving most per-account " +
-    "averages of the sparse D columns empty. These averages are behavioural rather than " +
-    "label-derived, so restoring them strengthened the part of the model that does not " +
-    "depend on fraud being confirmed."),
-  P("A useful external check supports this reading. Published results on this benchmark " +
-    "cluster around 0.94 to 0.96 AUC-ROC. The figure obtained under the immediate-label " +
-    "assumption sits above that range, while the figure obtained under a thirty-day delay " +
-    "sits just below it. The delayed measurement is the one that corresponds to deployable " +
-    "performance, and this report adopts it as the headline figure for deployment."),
+    "cycle would supply them. The sensitivity is concentrated in the first month. And the features remain " +
+    `worthwhile: at a sixty-day delay they are still worth ` +
+    `${num(abl("delay_60", "xgboost").auc_pr - abl("none", "xgboost").auc_pr, 3)} AUC-PR ` +
+    "over removing them, so they should be built with a delay matched to the institution's " +
+    "actual confirmation window."),
+  P("Published results on this benchmark cluster around 0.94 to 0.96 AUC-ROC; the " +
+    "immediate-label figure sits above that range and the thirty-day figure just below it. " +
+    "The delayed measurement corresponds to deployable performance, and this report adopts " +
+    "it as the headline figure for deployment."),
 
   ...extensionSections,
 
-  H2("4.15  Environmental and Societal Impact"),
-  P("The societal case for the system is that fraud losses are ultimately borne by " +
-    "customers through pricing and by merchants through chargebacks, and that a system " +
-    "which removes a substantial share of that loss at a controlled false-decline rate " +
-    "transfers value back to both. The false-decline rate is the side of this that carries " +
-    "the ethical weight: a declined legitimate transaction is a customer refused service, " +
-    "and the tiered design exists so that uncertainty is met with a proportionate response " +
-    "- an authentication challenge - rather than with a refusal."),
-  P("Two risks are worth naming. A model that keys on entity history will decline a " +
-    "customer for the past behaviour of an account or device rather than for the " +
-    "transaction in front of it, and the SHAP reason codes exist partly so that such a " +
-    "decision is visible and contestable rather than silent. Separately, IEEE-CIS is " +
-    "anonymised and carries no protected attributes, so fairness cannot be assessed on it. " +
-    "It can on Bank Account Fraud, and section 4.13 found there that applicants over fifty " +
-    "would be falsely flagged about three times as often as younger ones at the same " +
-    "operating point. That disparity must be corrected before deployment, and section 5.4 " +
-    "sets out how."),
-  P("The environmental cost of the work is modest and was measured rather than estimated. " +
-    "The tabular tiers train in about an hour on a sixteen-core laptop CPU and the " +
-    "sequential, relational and CatBoost tiers in under fifteen minutes on a single cloud " +
-    "GPU, and the per-model checkpointing exists partly so that an interrupted run does not " +
-    "repeat completed work. Deliberate design choices " +
-    "reduced this further: pruning redundant columns before training, and using an explicit " +
-    "graph feature set in place of repeated end-to-end graph training."),
+  H2("4.16  Environmental and Societal Impact"),
+  P("Fraud losses are borne by customers through pricing and by merchants through " +
+    "chargebacks, so removing a share of them at a controlled false-decline rate returns " +
+    "value to both. A declined legitimate transaction is a customer refused service, and the " +
+    "tiered design meets uncertainty with an authentication challenge rather than a refusal. " +
+    "A model keyed on entity history may act on an account's past rather than the " +
+    "transaction in front of it, and the reason codes make such a decision visible and " +
+    "contestable. IEEE-CIS carries no protected attributes; on Bank Account Fraud, section " +
+    "4.14 found a threefold age disparity in false-positive rate that must be corrected " +
+    "before deployment."),
+  P("The environmental cost is modest: the tabular tiers train in about an hour on a " +
+    "sixteen-core laptop CPU and the GPU tiers in under fifteen minutes on one cloud GPU, " +
+    "helped by column pruning, per-model checkpointing and explicit graph features in place " +
+    "of repeated graph training."),
 
-  H2("4.16  Conclusions"),
+  H2("4.17  Conclusions"),
   P("The system meets the objectives it was specified against. It detects fraud on a " +
     `strictly chronological split at ${num(best?.auc_pr_lift_over_prevalence, 1)} times the ` +
     "no-skill floor; produces a calibrated risk score whose high tier isolates " +
     `${pct(highTier.share_of_all_fraud, 0)} of all fraud into ` +
     `${pct(highTier.share_of_volume, 1)} of volume; attaches a faithful, plain-language ` +
     "reason to every alert; and reports drift, serving cost, adversarial robustness and " +
-    "transfer to a second dataset as measurements rather than assertions. It is delivered " +
+    "transfer to a second dataset as measurements rather than assertions. The exploratory " +
+    "and statistical analysis shows why a model is needed: no single attribute has more " +
+    "than a small association with fraud, and more than half of fraud repeats on an " +
+    "account already used for fraud. The segment analysis locates the main weakness, " +
+    "accounts seen for the first time (section 4.7). It is delivered " +
     "as a product: a single raw transaction is decided, with its features computed online, " +
     "inside the latency requirement."),
   P("Several findings refine the expectations set by the literature. On this benchmark the " +
-    "sequential and relational tiers add no signal beyond the tabular tier (section 4.8), " +
+    "sequential and relational tiers add no signal beyond the tabular tier (section 4.12), " +
     "and stacking, hyper-parameter tuning, the account profile and a third boosting model " +
     "do not improve on a simple two-model average under validation-based selection " +
-    "(sections 4.2, 4.10 and 4.11). On Bank Account Fraud the method transfers, while the " +
+    "(sections 4.4 and 4.12). On Bank Account Fraud the method transfers, while the " +
     "score bands must be derived for each deployment and the age disparity in " +
-    "false-positive rate must be corrected before use (section 4.13). The label-delay ablation in section 4.9 " +
+    "false-positive rate must be corrected before use (section 4.14). The label-delay ablation in section 4.11 " +
     "remains the finding with the widest implication, since it applies to any fraud system " +
     "built on entity history and is not reported by any of the studies surveyed in " +
     "Chapter 2."),
@@ -733,6 +585,8 @@ const chapter4 = [
 ];
 
 /* =================================================== CHAPTER 5 ============ */
+const firstSeen = (D.segments || []).find(
+  (r) => r.dimension === "Account history" && r.segment === "first seen") || {};
 const chapter5 = [
   H1("CHAPTER 5  CONCLUSION AND FUTURE SCOPE"),
 
@@ -742,23 +596,20 @@ const chapter5 = [
     "actionable measure of risk. The problem is characterised by extreme class imbalance, " +
     "asymmetric error costs, non-stationarity arising from adversarial adaptation, and a " +
     "requirement that decisions be explainable."),
-  P("A review of seven studies published between 2023 and 2026 established that ensemble " +
-    "methods outperform any single constituent model, that relational and sequential signal " +
-    "carries information inaccessible to row-wise classifiers, and that streaming " +
-    "infrastructure has made real-time scoring practical. It also exposed six gaps: " +
-    "evaluation protocols that ignore time, tabular-only modelling, treatment of detection " +
-    "as the end point rather than risk quantification, opaque decisions, unmeasured drift " +
-    "and adversarial decay, and unreported cost of serving. These were converted into six " +
-    "verifiable objectives."),
-  P("The methodology adopted is a five-stage pipeline realised as a five-layer " +
-    "architecture, implemented as a configuration-driven and tested Python package. Data " +
-    "preparation uses a strictly chronological split and applies class weighting to the " +
-    "training fold only. The model layer benchmarks four families under one protocol. A " +
-    "stacking meta-learner fitted on out-of-fold scores and an isotonic calibrator produce " +
-    "a 0-100 risk score with three cost-sensitive operational tiers; the decision layer " +
-    "chooses between the stack, each base model and simple log-odds averages on validation. " +
-    "SHAP supplies per-alert reason codes, rendered in plain language and tested for " +
-    "faithfulness, and the Population Stability Index quantifies drift. An online feature " +
+  P("A review of seven studies published between 2023 and 2026 exposed six gaps: " +
+    "evaluation protocols that ignore time, tabular-only modelling, detection treated as the " +
+    "end point rather than risk quantification, opaque decisions, unmeasured drift and " +
+    "adversarial decay, and unreported cost of serving. These became six verifiable " +
+    "objectives, and a seventh covers the analysis of the data and of the results."),
+  P("The methodology follows the CRISP-DM cycle and is realised as a five-stage pipeline " +
+    "and a five-layer " +
+    "architecture in a tested Python package, with a strictly chronological split, four " +
+    "model families under one protocol, a decision layer selecting on validation, and an " +
+    "isotonic calibrator producing a 0-100 risk score with three cost-sensitive tiers. SHAP " +
+    "supplies plain-language reason codes and PSI quantifies drift. Exploratory data " +
+    "analysis, chi-square and Mann-Whitney tests with effect sizes, day-block bootstrap " +
+    "confidence intervals and a segment-level breakdown of performance describe the data " +
+    "and qualify the results. An online feature " +
     "store turns the pipeline into a product that scores one raw transaction at a time, " +
     "exposed through an API, an analyst console and a streaming transport."),
 
@@ -771,6 +622,17 @@ const chapter5 = [
     `queue covering ${pct(highTier.share_of_volume)} of volume at ` +
     `${pct(highTier.precision_in_tier)} precision, reducing modelled loss by ` +
     `${num(costCfg.cost_reduction_pct, 1)} per cent.`),
+  P("The data analysis explains and qualifies these figures. No single attribute is more " +
+    "than weakly associated with fraud, so detection depends on combining many signals, " +
+    `and ${pct(D.analytics?.concentration?.fraud_on_account_with_earlier_fraud, 1)} of ` +
+    "fraud repeats on an account already used for fraud, which is why account history is " +
+    "the strongest evidence the model uses. The headline AUC-PR carries a 95 per cent " +
+    `confidence interval of ${num(D.bootstrap?.[0]?.ci_low, 3)} to ` +
+    `${num(D.bootstrap?.[0]?.ci_high, 3)}. The main limitation is located precisely: on ` +
+    "accounts seen for the first time, " +
+    `${pct(firstSeen.share_of_volume, 0)} of test volume, the system catches ` +
+    `${pct(firstSeen.fraud_caught_flagged, 0)} of fraud, against 90 per cent or more once ` +
+    "an account has any history."),
   P("What distinguishes this work from the studies reviewed is not any single model. It is " +
     "the combination of a chronological protocol, an explicit decision layer priced against " +
     "the costs of the two error types, explanation and drift treated as first-class " +
@@ -783,25 +645,36 @@ const chapter5 = [
     `a thirty-day delay this system still reaches ${num(abl("delay_30", "xgboost").auc_pr)} ` +
     "AUC-PR, and this report adopts that figure as its headline for deployable performance. " +
     "None of the surveyed studies measures this."),
-  P("The sequential and relational tiers did not outperform gradient boosting on this " +
-    "benchmark, which is attributable to the short per-entity histories the data affords, " +
-    "to a validation-to-test gap that indicates period-specific fitting, and to the explicit " +
-    "graph features already available to the tabular models. Tuning, additional features " +
-    "and additional learners changed validation scores by less than the variation between " +
-    "runs and were therefore not adopted. On Bank Account Fraud the method transfers but " +
-    "the fixed tiers do not, and false-positive rates differ by age by a factor of about " +
-    "three, which a deployment must correct."),
+  P("The sequential and relational tiers did not outperform gradient boosting, owing to " +
+    "short per-entity histories and period-specific fitting, and tuning, extra features and " +
+    "extra learners changed validation scores by less than the run-to-run variation. On " +
+    "Bank Account Fraud the method transfers but the fixed tiers do not, and an age " +
+    "disparity in false-positive rate must be corrected before deployment."),
 
   H2("5.3  Contribution Summary"),
-  P("[TO BE COMPLETED BEFORE SUBMISSION - divide the work and list who is responsible " +
-    "for which part. The guidelines award the 100 marks on individual contribution, so " +
-    "this section cannot be left generic.]", { bold: true }),
-  P("The project was carried out by a group of three: Kabir Chhabra (235805300), Mayank " +
-    "(235805360) and Nandurkar Shreyas Vivek (235805446), under the guidance of " +
-    "Dr. Usha M. The components to be attributed are the data pipeline and ingestion " +
-    "layer; the feature layer and its causality guarantees; the five model tiers; the " +
-    "fusion, calibration and risk-tier decision layer; the explanation and drift " +
-    "monitoring; the experiment suite; and this report."),
+  P("The individual contribution of Nandurkar Shreyas Vivek (235805446) to the project " +
+    "comprises the following:"),
+  ...Bullets([
+    "Data analytics (Sections 4.2, 4.3 and 4.7): the data-quality profile, exploratory " +
+    "analysis of fraud by amount, time and segment, the concentration analysis, chi-square " +
+    "and Mann-Whitney tests with effect sizes, day-block bootstrap confidence intervals, " +
+    "the segment-level performance breakdown, and the Fraud analytics page of the console.",
+    "Corrections to the feature layer and evaluation: running means that skip missing " +
+    "values (which raised the thirty-day-delay result from 0.573 to " +
+    `${num(abl("delay_30", "xgboost").auc_pr, 3)} AUC-PR), a fraud-rate prior that had ` +
+    "used test-span prevalence, and the report's table parsing.",
+    "The decision layer's equal-weight log-odds blend, now the selected score (Section 4.4).",
+    "The deployed product (Section 4.15): the online feature store reproducing every " +
+    "offline feature, the single-transaction scoring path, the reworked API, the " +
+    "check-a-transaction, live-ledger and monitoring views, plain-language reason codes " +
+    "with the deletion test of their faithfulness (Section 4.8), the feedback loop and the " +
+    "streaming transport.",
+    "The further experiments and checks: Optuna tuning, the account profile, CatBoost and " +
+    "the GPU grid for the deep models (Section 4.12), the adversarial robustness study " +
+    "(Section 4.13), and transfer and fairness on Bank Account Fraud (Section 4.14).",
+    "Reproducibility (Docker, GPU jobs on Kaggle), the automated tests for the new " +
+    "components, the data-analytics framing of the report, and this report.",
+  ]),
 
   H2("5.4  Future Scope"),
   P("The first direction follows from the label-delay result. Having established that " +
@@ -822,8 +695,12 @@ const chapter5 = [
     "one process; a production deployment would add horizontal scaling behind the streaming " +
     "transport, persistence for the online feature store, and a retraining pipeline driven " +
     "by the live PSI monitor and by confirmed outcomes from the analyst feedback loop. The " +
-    "tier boundaries, which section 4.13 showed do not transfer between operating points, " +
+    "tier boundaries, which section 4.14 showed do not transfer between operating points, " +
     "would be derived per deployment from its cost model and review capacity."),
+  P("A fourth direction follows from the segment analysis of Section 4.7. Accounts seen for " +
+    "the first time are where detection is weakest, so a dedicated model or rule set for " +
+    "them, built only on signals that need no history - device, e-mail domain, address " +
+    "distance and velocity across the card - would target the largest remaining gap."),
   Break(),
 ];
 
@@ -887,12 +764,12 @@ const backMatter = [
   P("Student Details", { bold: true, after: 120 }),
   T([
     ["Field", "Detail"],
-    ["Student Name", "Kabir Chhabra"],
-    ["Registration Number", "235805300"],
+    ["Student Name", "Nandurkar Shreyas Vivek"],
+    ["Registration Number", "235805446"],
     ["Semester", "VII"],
-    ["Group Members", "Mayank (235805360); Nandurkar Shreyas Vivek (235805446)"],
-    ["Email Address", "[to be filled]"],
-    ["Phone No (M)", "[to be filled]"],
+    ["Group Members", "Mayank (235805360); Kabir Chhabra (235805300)"],
+    ["Email Address", "nandurkar.mitblr2023@learner.manipal.edu"],
+    ["Phone No (M)", "+91 9004491325"],
   ], [3, 7], { numericFrom: 99 }),
   P("Project Details", { bold: true, after: 120 }),
   T([
@@ -900,7 +777,7 @@ const backMatter = [
     ["Project Title", "Financial Transaction Fraud Detection and Risk Modelling"],
     ["Phase", "Phase-3: Implementation and Result Analysis"],
     ["Project Duration", "Sixth and Seventh Semester"],
-    ["Date of Report", "September 2026"],
+    ["Date of Report", "October 2026"],
   ], [3, 7], { numericFrom: 99 }),
   P("Guide Details", { bold: true, after: 120 }),
   T([

@@ -13,7 +13,7 @@ const OUT = path.join(ROOT, "reports", "Phase-3_Fraud_Detection_Report.docx");
 
 // A4 minus 1-inch margins, in DXA.
 const CONTENT_WIDTH = 9026;
-const FIG_MAX_PX = 600;
+const FIG_MAX_PX = 480;
 
 /* ------------------------------------------------------------------ data -- */
 const readJson = (rel) => {
@@ -85,11 +85,20 @@ const D = {
   tunedComparison: readCsv("reports/tuned_run/model_comparison.csv"),
   handsetComparison: readCsv("reports/baseline_handset/model_comparison.csv"),
   handsetFusion: readJson("reports/baseline_handset/fusion_summary.json"),
+  analytics: readJson("reports/metrics/analytics_summary.json"),
+  edaQuality: readCsv("reports/tables/eda_data_quality.csv"),
+  edaAmount: readCsv("reports/tables/eda_amount_by_class.csv"),
+  edaSegments: readCsv("reports/tables/eda_fraud_by_segment.csv"),
+  edaDaily: readCsv("reports/tables/eda_daily.csv"),
+  statsCategorical: readCsv("reports/tables/stats_categorical_tests.csv"),
+  statsNumeric: readCsv("reports/tables/stats_numeric_tests.csv"),
+  bootstrap: readCsv("reports/tables/stats_bootstrap_ci.csv"),
+  segments: readCsv("reports/tables/segment_performance.csv"),
 };
 
 const num = (v, dp = 4) => (v === undefined || v === null || v === "" || Number.isNaN(Number(v)))
   ? "-" : Number(v).toFixed(dp);
-const int = (v) => (v === undefined || v === null || v === "") ? "-" : Number(v).toLocaleString("en-IN");
+const int = (v) => (v === undefined || v === null || v === "") ? "-" : Number(v).toLocaleString("en-US");
 const pct = (v, dp = 2) => (v === undefined || v === null) ? "-" : `${(Number(v) * 100).toFixed(dp)} %`;
 
 /** Internal model keys read badly in a thesis table; give them proper names. */
@@ -132,6 +141,7 @@ const Runs = (runs, opts = {}) => new Paragraph({
 
 const H1 = (text) => new Paragraph({
   heading: HeadingLevel.HEADING_1,
+  keepNext: true,
   alignment: AlignmentType.CENTER,
   spacing: { before: 240, after: 240 },
   children: [new TextRun({ text, bold: true, size: 32, font: "Times New Roman" })],
@@ -139,6 +149,7 @@ const H1 = (text) => new Paragraph({
 
 const H2 = (text) => new Paragraph({
   heading: HeadingLevel.HEADING_2,
+  keepNext: true,
   spacing: { before: 280, after: 140 },
   children: [new TextRun({ text, bold: true, size: 26, font: "Times New Roman" })],
 });
@@ -156,7 +167,7 @@ const Caption = (text) => new Paragraph({
   children: [new TextRun({ text, size: 20, italics: true, font: "Times New Roman" })],
 });
 
-const cell = (text, { bold = false, width, align = AlignmentType.LEFT, shade } = {}) =>
+const cell = (text, { bold = false, width, align = AlignmentType.LEFT, shade, keepNext = false } = {}) =>
   new TableCell({
     width: { size: width, type: WidthType.DXA },
     verticalAlign: VerticalAlign.CENTER,
@@ -164,6 +175,7 @@ const cell = (text, { bold = false, width, align = AlignmentType.LEFT, shade } =
     margins: { top: 60, bottom: 60, left: 100, right: 100 },
     children: [new Paragraph({
       alignment: align,
+      keepNext,
       spacing: { after: 0, line: 260 },
       children: [new TextRun({ text: String(text), bold, size: 19, font: "Times New Roman" })],
     })],
@@ -184,6 +196,7 @@ const T = (rows, weights, { numericFrom = 1 } = {}) => {
         bold: r === 0,
         width: widths[c],
         shade: r === 0 ? "E8E8E8" : undefined,
+        keepNext: r === rows.length - 1,
         align: r === 0 ? AlignmentType.CENTER
           : (c >= numericFrom ? AlignmentType.CENTER : AlignmentType.LEFT),
       })),
@@ -223,6 +236,7 @@ const Figure = (relPath, caption, maxPx = FIG_MAX_PX) => {
   return [
     new Paragraph({
       alignment: AlignmentType.CENTER,
+      keepNext: true,
       spacing: { before: 160, after: 0 },
       children: [new ImageRun({ data: buf, type, transformation: { width, height } })],
     }),
@@ -267,8 +281,6 @@ const titlePage = [
   P("COMPUTER SCIENCE AND ENGINEERING",
     { align: AlignmentType.CENTER, bold: true, size: 26, after: 400 }),
   P("Submitted by", { align: AlignmentType.CENTER, after: 0 }),
-  P("Kabir Chhabra  (235805300)", { align: AlignmentType.CENTER, bold: true, after: 0 }),
-  P("Mayank  (235805360)", { align: AlignmentType.CENTER, bold: true, after: 0 }),
   P("Nandurkar Shreyas Vivek  (235805446)",
     { align: AlignmentType.CENTER, bold: true, after: 300 }),
   P("Under the guidance of", { align: AlignmentType.CENTER, after: 0 }),
@@ -332,18 +344,24 @@ const abstract = [
     "for the decisions they produce. A fraud system must therefore do two things that the " +
     "literature usually treats as one: decide whether a transaction is fraudulent, and " +
     "quantify how risky it is on a scale an operation can act upon."),
-  P("This project implements a five-stage pipeline with a feedback loop. Behavioural, " +
+  P("This project follows the data-analytics process from the description of the data to " +
+    "a prescribed action, implemented as a five-stage pipeline with a feedback loop. " +
+    "Behavioural, " +
     "velocity and relational features are engineered under a strict causality rule, so that " +
     "no aggregate may be computed from a transaction later than the one being scored. Four " +
     "model families are benchmarked under one identical protocol: logistic regression and " +
     "random forest as baselines, XGBoost and LightGBM as the tabular tier, an LSTM over " +
     "per-entity transaction sequences, and a temporal heterogeneous graph neural network " +
-    "with attention over the card-merchant-device graph. A " +
-    "stacking meta-learner fitted on out-of-fold scores fuses the base probabilities, " +
-    "isotonic regression calibrates the result, and the calibrated probability is mapped to " +
+    "with attention over the card-merchant-device graph. A decision layer chooses on " +
+    "validation between a stacking meta-learner and simple averages of the base scores, " +
+    "selecting the average of XGBoost and LightGBM; isotonic regression calibrates the " +
+    "result, and the calibrated probability is mapped to " +
     "a 0-100 risk score with cost-sensitive operational tiers. Evaluation uses a strictly " +
     "chronological split of the IEEE-CIS Fraud Detection benchmark, comprising 590,540 " +
-    "transactions at 3.50 per cent fraud prevalence over 182 days."),
+    "transactions at 3.50 per cent fraud prevalence over 182 days. Exploratory analysis and " +
+    "statistical tests with effect sizes characterise the data before any model is fitted, " +
+    "and the results are qualified with bootstrap confidence intervals and a breakdown by " +
+    "segment."),
   P(`On the held-out final span of ${int(D.split?.test?.rows)} transactions, the strongest ` +
     `model attains an AUC-PR of ${num(best?.auc_pr)} against a no-skill floor equal to the ` +
     `prevalence of ${num(testPrev)}, a lift of ` +
@@ -378,6 +396,7 @@ const frontTables = [
   H1("LIST OF TABLES"),
   T([
     ["Table", "Title"],
+    ["1.1", "Project work schedule"],
     ["2.1", "Survey of recent work on financial fraud detection (2023-2026)"],
     ["2.2", "Performance metrics reported in the reviewed literature"],
     ["2.3", "Research gaps identified from the literature review"],
@@ -389,23 +408,25 @@ const frontTables = [
     ["3.6", "Tools and technologies used"],
     ["4.1", "Chronological split of the benchmark"],
     ["4.2", "Composition of the engineered feature set"],
-    ["4.3", "Model comparison on the held-out test span"],
-    ["4.4", "Effect of isotonic calibration"],
-    ["4.5", "Risk-tier performance under the specified score bands"],
-    ["4.6", "Modelled cost of the decision policy"],
-    ["4.7", "Global SHAP attribution over high-risk alerts"],
-    ["4.8", "Attribution by evidence family over high-risk alerts"],
-    ["4.9", "Explanation faithfulness: deletion test on high-risk alerts"],
-    ["4.10", "Population Stability Index across temporal windows"],
-    ["4.11", "Inference latency of the complete benchmark stack"],
-    ["4.12", "Hyper-parameter search over the sequential and relational tiers"],
-    ["4.13", "Label-delay ablation"],
-    ["4.14", "Optuna search for the boosting tier and its effect on the test span"],
-    ["4.15", "Effect of the account profile and CatBoost"],
-    ["4.16", "Evasion of the deployed model under attacker-controlled features"],
-    ["4.17", "The same protocol on Bank Account Fraud (test month)"],
-    ["4.18", "Fixed risk bands applied to Bank Account Fraud"],
-    ["4.19", "Latency of the product path, from raw transaction to decision"],
+    ["4.3", "Data-quality profile of the training span by column family"],
+    ["4.4", "Transaction amount by class, training span"],
+    ["4.5", "Chi-square tests of categorical attributes against fraud"],
+    ["4.6", "Mann-Whitney U tests of numeric attributes, fraud against legitimate"],
+    ["4.7", "Model comparison on the held-out test span"],
+    ["4.8", "Effect of isotonic calibration"],
+    ["4.9", "Risk-tier performance under the specified score bands"],
+    ["4.10", "Modelled cost of the decision policy"],
+    ["4.11", "95 per cent confidence intervals for the test-span results (day-block bootstrap)"],
+    ["4.12", "Detection performance by segment on the held-out test span"],
+    ["4.13", "Attribution by evidence family over high-risk alerts"],
+    ["4.14", "Explanation faithfulness: deletion test on high-risk alerts"],
+    ["4.15", "Inference latency of the complete benchmark stack"],
+    ["4.16", "Label-delay ablation"],
+    ["4.17", "Further modelling experiments and the adoption decision"],
+    ["4.18", "Evasion of the deployed model under attacker-controlled features"],
+    ["4.19", "The same protocol on Bank Account Fraud (test month)"],
+    ["4.20", "Fixed risk bands applied to Bank Account Fraud"],
+    ["4.21", "Latency of the product path, from raw transaction to decision"],
   ], [1, 7], { numericFrom: 9 }),
   Break(),
   H1("LIST OF FIGURES"),
@@ -413,16 +434,19 @@ const frontTables = [
     ["Figure", "Title"],
     ["3.1", "Overall workflow of the proposed system"],
     ["3.2", "Layered architecture of the proposed system"],
-    ["4.1", "Model comparison by AUC-PR"],
-    ["4.2", "Precision-recall curves on the test span"],
-    ["4.3", "Reliability of the calibrated risk score"],
-    ["4.4", "Risk-score distribution and tier boundaries"],
-    ["4.5", "Global SHAP attribution over high-risk alerts"],
-    ["4.6", "Attribution by evidence family over high-risk alerts"],
-    ["4.7", "Fall in risk score when the stated reasons are removed"],
-    ["4.8", "Score drift across the test timeline"],
-    ["4.9", "Sensitivity of performance to label-confirmation delay"],
-    ["4.10", "Evasion rate against perturbation budget"],
+    ["4.1", "Daily transaction volume and fraud rate across the timeline"],
+    ["4.2", "Distribution of transaction amount, fraud against legitimate"],
+    ["4.3", "Fraud rate and volume by hour of day and day of the weekly cycle"],
+    ["4.4", "Fraud rate by segment"],
+    ["4.5", "Correlation between amount, count (C) and time-delta (D) features"],
+    ["4.6", "Concentration of fraud value across accounts"],
+    ["4.7", "Strength of association with fraud for each attribute"],
+    ["4.8", "Precision-recall curves on the test span"],
+    ["4.9", "Reliability of the calibrated risk score"],
+    ["4.10", "Risk-score distribution and tier boundaries"],
+    ["4.11", "Detection by segment on the held-out test span"],
+    ["4.12", "Global SHAP attribution over high-risk alerts"],
+    ["4.13", "Score drift across the test timeline"],
   ], [1, 7], { numericFrom: 9 }),
   Break(),
 ];

@@ -11,7 +11,7 @@ packages' DLLs). Everything runs in Docker; the repo is mounted at /app.
 
 ```bash
 docker compose run --rm frds python -m frds <stage>        # prepare|features|train|fuse|evaluate|all
-docker compose run --rm frds python -m frds tune|robustness|baf|stream
+docker compose run --rm frds python -m frds tune|robustness|baf|stream|analytics
 docker compose run --rm frds python -m pytest -q            # ~10 min alone; much slower under CPU contention
 docker compose up api dashboard                             # product: :8000/docs and :8501
 ```

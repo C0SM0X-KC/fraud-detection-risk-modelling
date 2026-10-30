@@ -9,10 +9,8 @@ const {
 /* =================================================== CHAPTER 1 ============ */
 const chapter1 = [
   H1("CHAPTER 1  INTRODUCTION"),
-  P("This chapter introduces the problem of financial transaction fraud detection, " +
-    "describes the present-day scenario that motivates the work, states the shortcomings " +
-    "in existing approaches that the project sets out to address, lists the objectives, " +
-    "and explains how the remainder of the report is organised."),
+  P("This chapter introduces the problem, the present-day scenario, the shortcomings of " +
+    "existing work, the objectives and the organisation of the report."),
 
   H2("1.1  Introduction to the Area of Work"),
   P("Financial fraud detection is the task of deciding, for each incoming transaction, " +
@@ -21,43 +19,38 @@ const chapter1 = [
     "intersection of machine learning, data engineering and risk management, and it is " +
     "distinguished from a conventional classification problem by four properties."),
   ...Bullets([
-    "The positive class is rare. In most realistic benchmarks fraudulent transactions " +
-    "account for between one and four per cent of all records, so a model that predicts " +
-    "the majority class for every input already scores above ninety-five per cent accuracy " +
-    "while catching nothing at all.",
-    "The cost of the two error types is asymmetric. A missed fraud costs the value of the " +
-    "transaction; a false decline costs review effort and customer goodwill. The two are " +
-    "not interchangeable and are not equal in magnitude.",
-    "The data generating process is non-stationary. Attackers observe the deployed decision " +
-    "boundary and adapt to it, so a model that performs well at deployment degrades over " +
+    "The positive class is rare: fraud is typically one to four per cent of records, so " +
+    "predicting legitimate for everything already scores above ninety-five per cent accuracy.",
+    "The two error types cost different amounts: a missed fraud costs the transaction value, " +
+    "a false decline costs review effort and customer goodwill.",
+    "The data are non-stationary: attackers adapt to the deployed model, which degrades over " +
     "the following months.",
     "The decision must be explainable. Financial institutions operate under model-governance " +
     "expectations that require a reason for every adverse action.",
   ]),
-  P("Risk modelling is the complementary half of the problem. A classifier answers a binary " +
-    "question, but an operational fraud system does not act on a binary answer. It needs a " +
-    "graded, calibrated measure of how risky a transaction is, so that low-risk traffic can " +
-    "clear without friction, borderline traffic can be challenged with an additional " +
-    "authentication factor, and genuinely high-risk traffic can be held for a human " +
-    "analyst. Converting a model output into such a measure requires calibration, threshold " +
-    "selection driven by cost rather than convention, and an operational tier structure. " +
-    "This project addresses both halves."),
+  P("Risk modelling is the complementary half. An operational system needs a graded, " +
+    "calibrated measure of risk, so that low-risk traffic clears without friction, " +
+    "borderline traffic is challenged with an extra authentication factor, and high-risk " +
+    "traffic is held for an analyst. This requires calibration, cost-driven thresholds and " +
+    "an operational tier structure. This project addresses both halves."),
+  P("The project is carried out as a data-analytics study, and its structure follows the " +
+    "four levels of analytics. Descriptive analytics establishes what the data contain: how " +
+    "much fraud there is, when it occurs and which segments carry it. Diagnostic analytics " +
+    "asks why: which attributes are genuinely associated with fraud, which features drive " +
+    "each decision, and how the population drifts over time. Predictive analytics " +
+    "estimates, for each new transaction, the probability that it is fraudulent. " +
+    "Prescriptive analytics converts that estimate into an action - approve, challenge or " +
+    "hold - priced against the cost of each kind of error. Machine learning supplies the " +
+    "predictive step; the other three are what turn a model into evidence an organisation " +
+    "can act on."),
 
   H2("1.2  Present-Day Scenario"),
-  P("The state of practice has changed substantially between 2023 and 2026, and three " +
-    "developments are directly relevant to this work."),
-  ...Bullets([
-    "Streaming detection has become routine. Stream-processing pipelines built on Apache " +
-    "Kafka and Apache Flink now score card transactions at millisecond-level latency under " +
-    "loads of the order of ten thousand transactions per second.",
-    "Relational learning has displaced purely row-wise modelling for organised fraud. Graph " +
-    "neural networks applied over graphs of cards, merchants, devices and addresses expose " +
-    "coordinated multi-account behaviour that a tabular classifier examining one row at a " +
-    "time cannot see.",
-    "The open problems have shifted from raw accuracy to robustness and accountability. " +
-    "Concept drift, adversarial robustness and explainability are now the recurring " +
-    "limitations named in survey papers.",
-  ]),
+  P("Three developments between 2023 and 2026 are directly relevant. Streaming pipelines " +
+    "on Apache Kafka and Flink now score card transactions in milliseconds at around ten " +
+    "thousand transactions per second. Graph neural networks over cards, merchants, devices " +
+    "and addresses expose coordinated multi-account fraud that row-wise models cannot see. " +
+    "And the open problems have shifted from raw accuracy to concept drift, adversarial " +
+    "robustness and explainability."),
 
   H2("1.3  Motivation and Shortcomings in Existing Work"),
   P("The literature reviewed in Chapter 2 reports strong headline metrics, but three " +
@@ -71,11 +64,15 @@ const chapter1 = [
     "build one pipeline in which several model families are compared under a single " +
     "time-ordered protocol, in which the output is calibrated and priced against the actual costs of the " +
     "two error types, and in which the assumptions that inflate reported performance are " +
-    "measured rather than left implicit."),
+    "measured rather than left implicit. A headline figure on its own also says little " +
+    "about the data behind it or about where a system fails, so this work treats the " +
+    "description of the data, formal tests of the observed differences and a breakdown of " +
+    "performance by segment as part of the result."),
 
   H2("1.4  Objectives of the Work"),
-  P("The objectives below are stated so that each is verifiable, and each addresses one or " +
-    "more of the research gaps identified in Table 2.3."),
+  P("The objectives below are stated so that each is verifiable. The first six each address " +
+    "one or more of the research gaps identified in Table 2.3; the seventh covers the " +
+    "analysis of the data and of the results."),
   ...Bullets([
     "To build a reproducible fraud detection pipeline on the IEEE-CIS Fraud Detection " +
     "benchmark, comprising 590,540 transactions at 3.50 per cent fraud prevalence, using a " +
@@ -98,15 +95,16 @@ const chapter1 = [
     "temporal windows, and to measure per-transaction inference latency at the median and " +
     "ninety-fifth percentile, establishing real-time feasibility rather than assuming it. " +
     "(Addresses G5 and G6.)",
+    "To analyse the data and the results as a data-analytics study: to profile the quality " +
+    "of the data, describe how fraud varies with amount, time and customer segment, test " +
+    "each observed association statistically with an effect size, attach confidence " +
+    "intervals to the headline results, and identify the segments in which detection is " +
+    "weakest. (Establishes what the data contain and how far the results can be trusted.)",
   ]),
 
   H2("1.5  Project Work Schedule"),
-  P("The project is carried out in phases in accordance with the minor specialization " +
-    "mini-project guidelines, with a separate review presentation and report for each " +
-    "phase. The earlier phases established the problem, surveyed the literature and " +
-    "specified the workflow, architecture and evaluation protocol. The present report " +
-    "covers the implementation of that specification and the analysis of its measured " +
-    "results."),
+  P("The project follows the minor specialization guidelines, with a review and report for " +
+    "each phase; this report covers the implementation and the analysis of its results."),
   T([
     ["Phase", "Activity", "Outcome"],
     ["Phase 1", "Domain study, topic finalisation, literature survey of work published " +
@@ -127,8 +125,9 @@ const chapter1 = [
     "methodology: the overall workflow, the step-wise data preparation and model " +
     "development procedure, the assumptions made, the layered system architecture, the " +
     "model stack, the risk modelling and decision layer, the dataset specification, the " +
-    "evaluation metrics and the implementation. Chapter 4 analyses the results obtained on " +
-    "the benchmark. Chapter 5 concludes and sets out the future scope. The references " +
+    "evaluation metrics and the implementation. Chapter 4 opens with an exploratory and " +
+    "statistical analysis of the data, then analyses the results obtained on the " +
+    "benchmark, including their confidence intervals and a breakdown by segment. Chapter 5 concludes and sets out the future scope. The references " +
     "follow in IEEE format."),
   Break(),
 ];

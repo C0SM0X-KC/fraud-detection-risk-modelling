@@ -202,3 +202,88 @@ Other measured results:
   shreyasnandurkar (no co-author line, user's instruction) and pushed to origin/master
   (github.com/C0SM0X-KC/fraud-detection-risk-modelling). CLAUDE.md and this file are
   gitignored (local only), as is the Phase-1 deck.
+
+## 9. Data-analytics additions (30 Oct 2026)
+
+Why: the project is a *Data Analytics* minor and read as ML-only. The user approved
+items 1-4 (EDA, statistical tests, segment analysis + bootstrap CIs, analytics console
+page); CRISP-DM reframing and DuckDB/SQL were offered and NOT requested. No model,
+feature or threshold changed; every earlier number is unchanged.
+
+- Stage `python -m frds analytics` (`src/frds/analytics.py`, ~3.5 min, light CPU).
+  EDA + tests on the TRAIN span only (rule: nothing chosen from validation/test);
+  bootstrap + segments on the test span (reporting only). Outputs: tables `eda_*`,
+  `stats_*`, `segment_performance.csv`; 9 figures; `metrics/analytics_summary.json`;
+  `data/processed/analytics_transactions.parquet` (row-level, Kaggle-derived, so under
+  gitignored data/). Tests: `tests/test_analytics.py` (4 pass). Page check:
+  `scripts/check_analytics_page.py` (headless AppTest, passes).
+- Console page "Fraud analytics" (`serving/views/analytics.py`): filters, KPI tiles,
+  daily trend, segment breakdown, Pareto, segment table, tests, CIs, figures.
+- Report: new 4.2 EDA, 4.3 statistical tests, 4.7 reliability + segments
+  (`scripts/report_analytics.js`). Chapter 4 renumbered by explicit map (sections
+  4.2-4.4 +2, 4.5+ +3; tables 4.3-4.6 +5, 4.7+ +7; figures 4.1-4.4 +8, 4.5+ +9);
+  verified: captions sequential, zero dangling refs, front lists 45/45. Also touched:
+  ch.4 intro, 4.19, 5.1, 1.6, abstract (one sentence), Table 3.1 (A.6, B.5), Table 3.6.
+  Not touched: title page, certificate, authorship, 5.3. The user must re-copy ch.1
+  (1.6), 3, 4, 5 (5.1) and the abstract into the individual report.
+- Key findings: no single attribute beyond a small effect (max V 0.164 recipient
+  e-mail, max |r| 0.283 C5; amount negligible but U-shaped by band); identity record
+  present -> 7.31% vs 2.14% fraud; 53.7% of fraud on an account with earlier fraud;
+  31% of fraud accounts carry 80% of fraud value; blend beats XGBoost by +0.0028
+  AUC-PR, 95% CI [0.0008, 0.0047] (day-block bootstrap, 1,000 resamples); FIRST-SEEN
+  accounts (37.9% of test volume) only 49.4% of fraud caught (AUC-PR 0.564) vs
+  90-99% for accounts with history - the main weakness, same mechanism as 4.15.
+- Demo bundle v2 updated with the analytics outputs and the rebuilt report.
+- Same day, second pass (user asked for the reframing + shortening):
+  - The user put their details INTO reports/Phase-3_Fraud_Detection_Report.docx, so a
+    plain `node scripts/build_report.js` would overwrite them. Backup:
+    reports/Phase-3_Fraud_Detection_Report_with_my_details_backup.docx. build_report.js
+    now takes an output path; the rewrite was built to
+    reports/Phase-3_Fraud_Detection_Report_DA.docx. Never build to the default path
+    without asking.
+  - Reframed as a data-analytics study: 1.1 four levels of analytics, 1.3 sentence,
+    1.4 seventh objective (data + results analysis), 3.1 CRISP-DM mapping, ch.4 intro
+    ordered by the four levels, 4.1 scope sentence, 5.1, 5.2 analytics paragraph, 5.4
+    first-seen-accounts direction, abstract opening.
+  - Old 4.11 (deep tiers), 4.13 (tuning), 4.14 (profile + CatBoost) merged into one
+    "4.12 Further Modelling Experiments" with one combined Table 4.20 (replaces old
+    Tables 4.19, 4.21, 4.22). Ch.4 is now 4.1-4.17, Tables 4.1-4.24, Figures 4.1-4.19.
+    Verified: sequential captions, zero dangling refs, every section ref's target title
+    checked by eye, front lists 43/43.
+  - Found one reference split across two source lines that the first renumbering
+    missed ("section " + "4.9"); it was in a merged section and is gone. A scan found
+    no other split references.
+- Same day, third pass (user: "reduce the content size", 56 Word pages; add my details):
+  - Title page now lists only the user (Nandurkar Shreyas Vivek, 235805446); PROJECT
+    DETAILS uses the user's name, reg. no., e-mail, phone, group members and date
+    "October 2026", as they had typed into the docx. Certificate, acknowledgement and 5.3
+    left as the group versions (rule: do not change them unasked).
+  - Shortened to 44 pages (counted by Word): removed figures that repeated a table
+    (missingness, model-comparison bars, SHAP groups, faithfulness, label delay,
+    robustness) and tables that repeated a figure (fraud rate by segment, SHAP top-10,
+    PSI windows); FIG_MAX_PX 600 -> 480; prose tightened in ch.1, 3, 4 and 5. Ch.4 is
+    now Tables 4.1-4.21, Figures 4.1-4.13. Table 1.1 added to the List of Tables (it had
+    always been missing). Verified: sequential captions, no dangling refs, lists match.
+  - Built to reports/Phase-3_Fraud_Detection_Report_DA_v2.docx (the _DA.docx was open
+    in Word and locked).
+- 5.3 written at the user's request (overrides the "do not touch 5.3" rule for this
+  text): group's earlier work = Phases 1-2 + the September implementation (Kabir
+  Chhabra's commits 12-14 Sep, credited to the group); individual = commit cc6d626
+  (22 Oct) + the 30 Oct analytics work. Built to reports/Phase-3_Fraud_Detection_Report_DA_v3.docx
+  (v2 was open in Word).
+- User then asked for 5.3 to describe only their own work: the group/earlier-work part
+  was removed; 5.3 is now one intro line + the six bullets of the user's contribution.
+- Final review fixes (30 Oct, afternoon). The user formatted v3 by hand, set the date to
+  October and updated the contents table. The fixes were applied by Word automation to a
+  copy, reports/Phase-3_Fraud_Detection_Report_Submission.docx (46 pages). This is the
+  submission file; v3 itself is untouched. Changes: Figures 3.1/3.2 replaced by
+  reports/figures/workflow.png and architecture.png (Phase-1 diagrams with the TabPFN
+  entries painted out) at full text width; Figure 4.10 redrawn with the Table 3.3 bands
+  30/70 (pipeline.py now plots fixed_policy, not the derived 5/100 policy); abstract
+  says the decision layer selects the XGBoost+LightGBM average; 5.4 "A further
+  direction" moved to the end as "A fourth direction"; keep-with-next on headings,
+  figure paragraphs and last table rows; lakh-style numbers changed to international;
+  page break before REFERENCES restored. Generator synced (int() en-US, keepNext,
+  diagram paths, abstract, 5.4), so a rebuild matches except the user's manual edits.
+- reports/Phase-3_Fraud_Detection_Report_FINAL.docx is an unchanged copy of v3 left
+  locked by a hung hidden Word process; it can be deleted.

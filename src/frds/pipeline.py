@@ -267,7 +267,7 @@ def stage_evaluate(cfg: Config, skip_shap: bool = False, skip_latency: bool = Fa
             log.info("tier policy '%s'\n%s", policy.source, breakdown.to_string(index=False))
 
         plots.score_distribution(
-            risk, y_test, derived_policy.medium_lo, derived_policy.high_lo,
+            risk, y_test, fixed_policy.medium_lo, fixed_policy.high_lo,
             figures_dir / "score_distribution.png",
         )
 
